@@ -2,7 +2,7 @@ import os
 from openai import AsyncOpenAI
 from app.db import get_db_connection
 
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.1-8b-instant")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "jina-embeddings-v3")
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.3"))
 
@@ -83,14 +83,13 @@ class RAGService:
 
             rows = await conn.fetch(
                 f"""
-                SELECT DISTINCT ON (j.id)
-                       j.id, j.case_number, j.court, j.date, j.thesis, j.source_url,
+                SELECT j.id, j.case_number, j.court, j.date, j.thesis, j.source_url,
                        jc.content AS chunk_content,
                        1 - (jc.embedding <=> $1) AS similarity
                 FROM judgment_chunks jc
                 JOIN judgments j ON j.id = jc.judgment_id
                 {where_sql}
-                ORDER BY j.id, jc.embedding <=> $1
+                ORDER BY jc.embedding <=> $1
                 LIMIT $2
                 """,
                 *params,
@@ -195,6 +194,9 @@ class RAGService:
         return "\n\n---\n\n".join(parts)
 
     async def _generate(self, query: str, context: str) -> str:
+        print("=== CONTEXT ===")
+        print(context[:800])
+        print("===============")
         response = await self.llm_client.chat.completions.create(
             model=LLM_MODEL,
             temperature=0.0,
