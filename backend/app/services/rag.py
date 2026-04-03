@@ -28,11 +28,20 @@ class RAGService:
 
     async def search(self, query: str, filters: dict) -> dict:
         embedding = await self._embed(query)
-        judgments = await self._search_judgment_chunks(embedding, filters, top_k=6)
+        judgments = await self._search_judgment_chunks(embedding, filters, top_k=10)
         articles = await self._search_articles(embedding, filters, top_k=5)
 
         judgments = [d for d in judgments if (d.get("similarity") or 0) >= SIMILARITY_THRESHOLD]
         articles = [d for d in articles if (d.get("similarity") or 0) >= SIMILARITY_THRESHOLD]
+
+        seen_counts = {}
+        filtered_judgments = []
+        for d in judgments:
+            jid = d["id"]
+            seen_counts[jid] = seen_counts.get(jid, 0) + 1
+            if seen_counts[jid] <= 3:
+                filtered_judgments.append(d)
+        judgments = filtered_judgments
 
         if not judgments and not articles:
             return {
