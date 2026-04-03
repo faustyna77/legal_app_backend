@@ -1,0 +1,35 @@
+status:200
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+
+
+
+
+
+<html>
+
+<HEAD>
+
+
+
+<META NAME="ROBOTS" CONTENT="NOARCHIVE">
+<META http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<META name="GENERATOR" content="IBM Software Development Platform">
+<META http-equiv="Content-Style-Type" content="text/css">
+<META name="Description" content="Centralna Baza Orzeczeń Naczelnego (NSA) i Wojewódzkich (WSA) Sądów Administracyjnych, Orzecznictwo NSA i WSA" />
+<link rel="shortcut icon" href="/img/favicon.ico" />
+
+<TITLE>
+
+
+
+Centralna Baza Orzeczeń Sądów Administracyjnych</TITLE>
+
+<!-- YUI scripts -->
+<link type="text/css" rel="stylesheet" href="/yui/container/assets/container.css">
+
+<script type="text/javascript" src="/yui/yahoo/yahoo-min.js"></script>
+<script type="text/javascript" src="/yui/event/event-min.js" ></script>
+<script type="text/javascript" src="/yui/dom/dom-min.js" ></script>
+<script type="text/javascript" src="/yui/dragdrop/dragdrop-min.js" ></script>
+<script type=
