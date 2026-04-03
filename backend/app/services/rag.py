@@ -193,7 +193,7 @@ class RAGService:
                 f"[ORZECZENIE | Sygnatura: {doc['case_number']} | "
                 f"Sąd: {doc['court']} | Data: {doc['date']}]"
             )
-            parts.append(f"{header}\n{text[:1200]}")
+            parts.append(f"{header}\n{text[:2000]}")
         for art in articles:
             header = (
                 f"[AKT PRAWNY | Tytuł: {art['act_title']} | "
@@ -220,6 +220,8 @@ class RAGService:
                         "ZAKAZ cytowania aktów prawnych, sygnatur, dat ani numerów Dz.U. "
                         "które nie są dosłownie wymienione w dostarczonych fragmentach. "
                         "Jeśli fragment jest obcięty lub niekompletny, opieraj się wyłącznie na tym co widać. "
+                        "Pytanie może dotyczyć wielu aspektów — odpowiedz na tyle ile fragmenty pozwalają. "
+                        "Nie musisz odpowiedzieć na każdy aspekt pytania jeśli nie ma go w fragmentach. "
                         "Jeśli dostarczone fragmenty nie zawierają odpowiedzi na pytanie, "
                         "napisz dokładnie: \"Brak wystarczających danych w bazie do odpowiedzi na to pytanie.\" "
                         "Podaj sygnaturę lub tytuł aktu tylko jeśli jest wprost w nagłówku fragmentu."
