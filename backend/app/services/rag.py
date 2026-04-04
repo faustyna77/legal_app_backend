@@ -28,11 +28,20 @@ class RAGService:
 
     async def search(self, query: str, filters: dict) -> dict:
         embedding = await self._embed(query)
-        judgments = await self._search_judgment_chunks(embedding, filters, top_k=6)
+        judgments = await self._search_judgment_chunks(embedding, filters, top_k=10)
         articles = await self._search_articles(embedding, filters, top_k=5)
 
         judgments = [d for d in judgments if (d.get("similarity") or 0) >= SIMILARITY_THRESHOLD]
         articles = [d for d in articles if (d.get("similarity") or 0) >= SIMILARITY_THRESHOLD]
+
+        seen_counts = {}
+        filtered_judgments = []
+        for d in judgments:
+            jid = d["id"]
+            seen_counts[jid] = seen_counts.get(jid, 0) + 1
+            if seen_counts[jid] <= 3:
+                filtered_judgments.append(d)
+        judgments = filtered_judgments
 
         if not judgments and not articles:
             return {
@@ -45,10 +54,16 @@ class RAGService:
         context = self._build_context(judgments, articles)
         answer = await self._generate(query, context)
 
+        seen_source_ids = set()
+        unique_sources = []
+        for d in judgments:
+            if d["id"] not in seen_source_ids:
+                seen_source_ids.add(d["id"])
+                unique_sources.append(self._doc_to_source(d, "judgment"))
+
         return {
             "answer": answer,
-            "sources": [self._doc_to_source(d, "judgment") for d in judgments[:3]]
-                     + [self._doc_to_source(d, "article") for d in articles[:2]],
+            "sources": unique_sources[:3] + [self._doc_to_source(d, "article") for d in articles[:2]],
             "judgments": judgments,
             "articles": articles,
         }
@@ -69,6 +84,9 @@ class RAGService:
             if filters.get("court"):
                 params.append(filters["court"])
                 conditions.append(f"j.court = ${len(params)}")
+            if filters.get("court_type"):
+                params.append(filters["court_type"])
+                conditions.append(f"j.court_type = ${len(params)}")
             if filters.get("source"):
                 params.append(filters["source"])
                 conditions.append(f"j.source = ${len(params)}")
@@ -78,6 +96,12 @@ class RAGService:
             if filters.get("date_to"):
                 params.append(filters["date_to"])
                 conditions.append(f"j.date <= ${len(params)}")
+            if filters.get("legal_area"):
+                params.append(filters["legal_area"])
+                conditions.append(f"j.legal_area = ${len(params)}")
+            if filters.get("city"):
+                params.append(filters["city"])
+                conditions.append(f"j.city = ${len(params)}")
 
             where_sql = "WHERE " + " AND ".join(conditions)
 
@@ -102,42 +126,6 @@ class RAGService:
                 results.append(d)
             results.sort(key=lambda x: x["similarity"], reverse=True)
             return results
-        finally:
-            await conn.close()
-
-    async def _search_judgments(self, embedding: list, filters: dict, top_k: int) -> list:
-        conn = await get_db_connection()
-        try:
-            conditions = ["embedding IS NOT NULL"]
-            params: list = [str(embedding), top_k]
-
-            if filters.get("court"):
-                params.append(filters["court"])
-                conditions.append(f"court = ${len(params)}")
-            if filters.get("source"):
-                params.append(filters["source"])
-                conditions.append(f"source = ${len(params)}")
-            if filters.get("date_from"):
-                params.append(filters["date_from"])
-                conditions.append(f"date >= ${len(params)}")
-            if filters.get("date_to"):
-                params.append(filters["date_to"])
-                conditions.append(f"date <= ${len(params)}")
-
-            where_sql = "WHERE " + " AND ".join(conditions)
-
-            rows = await conn.fetch(
-                f"""
-                SELECT id, case_number, court, date, thesis, content, source_url,
-                       1 - (embedding <=> $1) AS similarity
-                FROM judgments
-                {where_sql}
-                ORDER BY embedding <=> $1
-                LIMIT $2
-                """,
-                *params,
-            )
-            return [dict(r) for r in rows]
         finally:
             await conn.close()
 
@@ -178,25 +166,29 @@ class RAGService:
 
     def _build_context(self, judgments: list, articles: list) -> str:
         parts = []
-        for doc in judgments:
-            text = doc.get("thesis") or doc.get("content") or ""
+        for judgment in judgments:
+            thesis = judgment.get("thesis") or ""
+            content = judgment.get("content") or ""
+            if thesis:
+                text = f"Teza: {thesis}\n\nTreść: {content}"
+            else:
+                text = content
             header = (
-                f"[ORZECZENIE | Sygnatura: {doc['case_number']} | "
-                f"Sąd: {doc['court']} | Data: {doc['date']}]"
+                f"[ORZECZENIE | Sygnatura: {judgment['case_number']} | "
+                f"Sąd: {judgment['court']} | Data: {judgment['date']}]"
             )
-            parts.append(f"{header}\n{text[:1200]}")
+            parts.append(f"{header}\n{text}")
         for art in articles:
             header = (
                 f"[AKT PRAWNY | Tytuł: {art['act_title']} | "
                 f"Artykuł: {art['article_number']}]"
             )
-            parts.append(f"{header}\n{art['content'][:800]}")
+            parts.append(f"{header}\n{art['content']}")
         return "\n\n---\n\n".join(parts)
 
     async def _generate(self, query: str, context: str) -> str:
-        print("=== CONTEXT ===")
-        print(context[:800])
-        print("===============")
+        print(f"MODEL: {LLM_MODEL}")
+        print(f"CONTEXT FIRST 300: {context[:300]}")
         response = await self.llm_client.chat.completions.create(
             model=LLM_MODEL,
             temperature=0.0,
@@ -206,14 +198,17 @@ class RAGService:
                     "role": "system",
                     "content": (
                         "Jesteś asystentem prawnym. "
-                        "Odpowiadaj WYŁĄCZNIE na podstawie fragmentów dokumentów podanych poniżej. "
-                        "ZAKAZ korzystania z własnej wiedzy, pamięci ani żadnych zewnętrznych źródeł. "
-                        "ZAKAZ cytowania aktów prawnych, sygnatur, dat ani numerów Dz.U. "
-                        "które nie są dosłownie wymienione w dostarczonych fragmentach. "
-                        "Jeśli fragment jest obcięty lub niekompletny, opieraj się wyłącznie na tym co widać. "
-                        "Jeśli dostarczone fragmenty nie zawierają odpowiedzi na pytanie, "
-                        "napisz dokładnie: \"Brak wystarczających danych w bazie do odpowiedzi na to pytanie.\" "
-                        "Podaj sygnaturę lub tytuł aktu tylko jeśli jest wprost w nagłówku fragmentu."
+                        "Odpowiadaj na pytania na podstawie dostarczonych fragmentów orzeczeń sądowych. "
+                        "Każdy fragment zaczyna się od nagłówka [ORZECZENIE | Sygnatura: ... | Sąd: ... | Data: ...]. "
+                        "Fragmenty mogą zaczynać się w połowie zdania — to normalne, analizuj dostępną treść. "
+                        "Jeśli fragment zawiera pole 'Teza:' — użyj go jako głównej odpowiedzi. "
+                        "Jeśli brak tezy — odpowiedz na podstawie treści fragmentu. "
+                        "Nie korzystaj z własnej wiedzy — tylko z dostarczonych fragmentów. "
+                        "Nie cytuj aktów prawnych ani sygnatur których nie ma w nagłówkach fragmentów. "
+                        "Odpowiedź powinna być konkretna i zwięzła. "
+                        "Podaj sygnaturę orzeczenia z nagłówka. "
+                        "Jeśli żaden fragment nie dotyczy pytania, napisz: "
+                        "\"Brak wystarczających danych w bazie do odpowiedzi na to pytanie.\""
                     ),
                 },
                 {

@@ -380,6 +380,10 @@ def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
             cur.execute("SELECT id FROM judgments WHERE case_number = %s", (j["case_number"],))
             existing = cur.fetchone()
             if existing:
+                judgment_id = existing[0]
+                cur.execute("SELECT 1 FROM judgment_chunks WHERE judgment_id = %s LIMIT 1", (judgment_id,))
+                if not cur.fetchone() and j.get("content"):
+                    store_judgment_chunks(cur, judgment_id, j["content"])
                 continue
             if store_judgment(cur, j):
                 cur.execute("SELECT id FROM judgments WHERE case_number = %s", (j["case_number"],))
@@ -455,6 +459,10 @@ def populate_from_saos(
             cur.execute("SELECT id FROM judgments WHERE case_number = %s", (j["case_number"],))
             existing = cur.fetchone()
             if existing:
+                judgment_id = existing[0]
+                cur.execute("SELECT 1 FROM judgment_chunks WHERE judgment_id = %s LIMIT 1", (judgment_id,))
+                if not cur.fetchone() and j.get("content"):
+                    store_judgment_chunks(cur, judgment_id, j["content"])
                 continue
             if store_judgment(cur, j):
                 cur.execute("SELECT id FROM judgments WHERE case_number = %s", (j["case_number"],))
