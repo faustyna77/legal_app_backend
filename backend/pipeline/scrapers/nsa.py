@@ -63,9 +63,16 @@ class NSAScraper:
         thesis_tag = soup.find("span", class_="info-list-value-teza")
         thesis = thesis_tag.get_text(separator="\n").strip() if thesis_tag else None
 
+        court_type = None
+        if "Naczelny Sąd Administracyjny" in court_full or court_full.startswith("NSA"):
+            court_type = "NSA"
+        elif "Wojewódzki Sąd Administracyjny" in court_full or "WSA" in court_full:
+            court_type = "WSA"
+
         return {
             "case_number": case_number,
             "court": court_full,
+            "court_type": court_type,
             "city": city,
             "date": date,
             "content": content,
@@ -74,21 +81,19 @@ class NSAScraper:
             "doc_id": doc_id,
             "source_url": url,
             "source": "nsa",
+            "legal_area": "administracyjne",
         }
 
     def scrape_range(self, date_from: str, date_to: str, limit: int = 500) -> list[dict]:
         results = []
         page = 1
+        consecutive_out_of_range = 0
 
         while len(results) < limit:
             try:
                 response = self.session.get(
                     f"{BASE_URL}/cbo/find",
-                    params={
-                        "dataOd": date_from,
-                        "dataDo": date_to,
-                        "strona": page,
-                    },
+                    params={"p": page},
                     timeout=15,
                 )
                 response.raise_for_status()
@@ -108,8 +113,19 @@ class NSAScraper:
                 doc_id = href.split("/doc/")[-1]
                 judgment = self.scrape_judgment(doc_id)
                 if judgment:
-                    results.append(judgment)
-                    logger.info("Scraped %s (%d/%d)", judgment["case_number"], len(results), limit)
+                    j_date = judgment.get("date") or ""
+                    if date_from <= j_date <= date_to:
+                        results.append(judgment)
+                        consecutive_out_of_range = 0
+                        logger.info("Scraped %s date=%s (%d/%d)", judgment["case_number"], j_date, len(results), limit)
+                    elif j_date < date_from:
+                        consecutive_out_of_range += 1
+                        logger.info("Skipped %s date=%s (too old)", judgment["case_number"], j_date)
+                        if consecutive_out_of_range >= 5:
+                            logger.info("5 consecutive old judgments, stopping")
+                            return results
+                    else:
+                        logger.info("Skipped %s date=%s (too new)", judgment["case_number"], j_date)
                 time.sleep(self.delay)
 
             page += 1
