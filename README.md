@@ -1,5 +1,4 @@
-# legal_app_backend
-# legal_app_backend
+
 # Legal RAG API
 
 Semantic search engine for Polish court judgments and legal acts.
