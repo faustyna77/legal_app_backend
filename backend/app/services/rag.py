@@ -72,6 +72,7 @@ class RAGService:
         response = await self.embed_client.embeddings.create(
             model=EMBEDDING_MODEL,
             input=text,
+            extra_body={"task": "retrieval.query"},
         )
         return response.data[0].embedding
 
