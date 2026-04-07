@@ -19,7 +19,9 @@ rad.json
 #Translation Base-file
 *.g.xlf
 .env
-
+__pycache__/
+*.pyc
+*.pyo
 #License-file
 *.flf
 #Test results file

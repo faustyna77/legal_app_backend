@@ -13,7 +13,7 @@ Options:
     --limit        max records to fetch (default: 200)
     --embed        also generate Jina embeddings after storing
 """
-
+import json
 import argparse
 import logging
 import os
@@ -39,7 +39,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 JINA_API_KEY = os.getenv("JINA_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "jina-embeddings-v3")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.1-8b-instant")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 
 
 def get_conn():
@@ -62,6 +62,48 @@ def generate_thesis_with_llm(content: str) -> str | None:
     )
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"].strip()
+def generate_summary_with_llm(case_number: str, court: str, date, thesis: str, content: str) -> dict | None:
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY not set in .env")
+    response = httpx.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        json={
+            "model": LLM_MODEL,
+            "temperature": 0.0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Jestes asystentem prawnym. Na podstawie tresci orzeczenia sadowego "
+                        "wygeneruj ustrukturyzowane podsumowanie w jezyku polskim. "
+                        "Odpowiedz wylacznie w formacie JSON z polami: "
+                        "teza, stan_faktyczny, rozstrzygniecie, podstawa_prawna. "
+                        "Kazde pole to string. Nie dodawaj zadnych innych kluczy ani komentarzy."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Sygnatura: {case_number}\n"
+                        f"Sad: {court}\n"
+                        f"Data: {date}\n"
+                        f"Teza: {thesis}\n\n"
+                        f"Tresc orzeczenia:\n{content[:6000]}"
+                    ),
+                },
+            ],
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    raw = response.json()["choices"][0]["message"]["content"].strip()
+    try:
+        raw_clean = raw.replace("```json", "").replace("```", "").strip()
+        return json.loads(raw_clean)
+    except Exception:
+        return {"teza": raw, "stan_faktyczny": "", "rozstrzygniecie": "", "podstawa_prawna": ""}
+
 
 
 def backfill_thesis_with_llm(limit: int = 100) -> int:
@@ -90,6 +132,43 @@ def backfill_thesis_with_llm(limit: int = 100) -> int:
         cur.close()
         conn.close()
     logger.info("Backfilled thesis for %d judgments via LLM", updated)
+    return updated
+
+def backfill_summaries(limit: int = 100) -> int:
+    conn = get_conn()
+    cur = conn.cursor()
+    updated = 0
+    try:
+        cur.execute(
+            """SELECT id, case_number, court, date, thesis, content
+               FROM judgments
+               WHERE summary IS NULL AND content IS NOT NULL AND content != ''
+               LIMIT %s""",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        logger.info("Found %d judgments without summary", len(rows))
+        for row in rows:
+            judgment_id, case_number, court, j_date, thesis, content = row
+            try:
+                summary = generate_summary_with_llm(
+                    case_number, court, j_date, thesis or "", content
+                )
+                if summary:
+                    cur.execute(
+                        "UPDATE judgments SET summary = %s WHERE id = %s",
+                        (json.dumps(summary, ensure_ascii=False), judgment_id),
+                    )
+                    updated += 1
+                    logger.info("Generated summary for id=%d", judgment_id)
+            except Exception as e:
+                logger.error("Summary generation failed for id=%d: %s", judgment_id, e)
+            time.sleep(0.5)
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    logger.info("Generated summaries for %d judgments", updated)
     return updated
 
 
@@ -490,6 +569,7 @@ def main():
     parser.add_argument("--embed", action="store_true", help="Generate Jina embeddings after storing")
     parser.add_argument("--backfill-thesis", action="store_true", help="Backfill NULL thesis from SAOS detail endpoint")
     parser.add_argument("--backfill-thesis-llm", action="store_true", help="Backfill NULL thesis using Groq LLM from content")
+    parser.add_argument("--backfill-summaries", action="store_true", help="Generate summaries for judgments without summary")
     args = parser.parse_args()
 
     if not DATABASE_URL:
@@ -504,6 +584,10 @@ def main():
     if args.backfill_thesis_llm:
         logger.info("Backfilling thesis via Groq LLM...")
         backfill_thesis_with_llm(limit=args.limit)
+        return
+    if args.backfill_summaries:
+        logger.info("Backfilling summaries via Groq LLM...")
+        backfill_summaries(limit=args.limit)
         return
 
     if args.source == "saos":

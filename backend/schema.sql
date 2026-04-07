@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS judgments (
     court_type VARCHAR(100),
     legal_area VARCHAR(100),
     source VARCHAR(20),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    summary JSONB
 );
 
 CREATE INDEX IF NOT EXISTS idx_judgments_embedding
