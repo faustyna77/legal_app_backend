@@ -1,8 +1,9 @@
 import os
 import time
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from app.services.rag import RAGService
+from app.dependencies import verify_internal_key
 
 router = APIRouter()
 
@@ -10,11 +11,6 @@ router = APIRouter()
 class SearchRequest(BaseModel):
     query: str
     filters: dict = {}
-
-
-def verify_internal_key(x_internal_key: str = Header(...)):
-    if x_internal_key != os.getenv("INTERNAL_API_KEY"):
-        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 @router.post("/search")

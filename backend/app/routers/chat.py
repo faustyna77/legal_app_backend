@@ -3,14 +3,15 @@ from fastapi import APIRouter, HTTPException, Header, Depends
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 from app.db import get_db_connection
+from fastapi.security import APIKeyHeader
 
 router = APIRouter()
-
+api_key_scheme = APIKeyHeader(name="x-internal-key", auto_error=True)
 LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "jina-embeddings-v3")
 
 
-def verify_internal_key(x_internal_key: str = Header(...)):
+def verify_internal_key(x_internal_key: str = Depends(api_key_scheme)):
     if x_internal_key != os.getenv("INTERNAL_API_KEY"):
         raise HTTPException(status_code=403, detail="Forbidden")
 
