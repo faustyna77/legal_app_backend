@@ -31,7 +31,7 @@ jobs:
         with:
           name: python-app
           path: |
-            .
+            backend/
             !antenv/
 
   deploy:
@@ -59,4 +59,4 @@ jobs:
         with:
           app-name: 'testraglegal'
           slot-name: 'Production'
-          startup-command: 'cd backend && uvicorn main:app --host 0.0.0.0 --port 8000'
+          startup-command: 'uvicorn main:app --host 0.0.0.0 --port 8000'
