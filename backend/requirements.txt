@@ -16,3 +16,4 @@ beautifulsoup4>=4.12
 celery>=5.3
 redis>=5.0
 pdfminer.six>=20221105
+apscheduler>=3.10

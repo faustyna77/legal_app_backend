@@ -17,6 +17,7 @@ import json
 import argparse
 import logging
 import os
+import re
 import sys
 import time
 import psycopg2
@@ -174,6 +175,55 @@ def backfill_summaries(limit: int = 100) -> int:
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
+CASE_NUMBER_PATTERN = r"\b[IVX]+\s+[A-ZĄĆĘŁŃÓŚŹŻ]{1,6}(?:/[A-ZĄĆĘŁŃÓŚŹŻa-z]{1,6})?\s+\d+[A-Z]?/\d{2,4}\b"
+
+
+def extract_referenced_case_numbers(content: str) -> list[str]:
+    if not content:
+        return []
+    case_numbers = re.findall(CASE_NUMBER_PATTERN, content)
+    unique: list[str] = []
+    seen = set()
+    for case_number in case_numbers:
+        normalized = " ".join(case_number.split())
+        if normalized not in seen:
+            seen.add(normalized)
+            unique.append(normalized)
+    return unique
+
+
+def store_judgment_references(cur, judgment_id: int, case_number: str, content: str):
+    referenced_case_numbers = extract_referenced_case_numbers(content)
+    for referenced_case_number in referenced_case_numbers:
+        if referenced_case_number == case_number:
+            continue
+        cur.execute(
+            "SELECT id FROM judgments WHERE case_number = %s",
+            (referenced_case_number,),
+        )
+        row = cur.fetchone()
+        referenced_judgment_id = row[0] if row else None
+        cur.execute(
+            """
+            INSERT INTO judgment_references (judgment_id, referenced_case_number, referenced_judgment_id)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (judgment_id, referenced_case_number) DO UPDATE
+            SET referenced_judgment_id = COALESCE(judgment_references.referenced_judgment_id, EXCLUDED.referenced_judgment_id)
+            """,
+            (judgment_id, referenced_case_number, referenced_judgment_id),
+        )
+
+
+def link_references_to_existing_judgment(cur, referenced_case_number: str, referenced_judgment_id: int):
+    cur.execute(
+        """
+        UPDATE judgment_references
+        SET referenced_judgment_id = %s
+        WHERE referenced_case_number = %s
+          AND referenced_judgment_id IS NULL
+        """,
+        (referenced_judgment_id, referenced_case_number),
+    )
 
 
 def split_into_chunks(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
@@ -463,12 +513,19 @@ def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
                 cur.execute("SELECT 1 FROM judgment_chunks WHERE judgment_id = %s LIMIT 1", (judgment_id,))
                 if not cur.fetchone() and j.get("content"):
                     store_judgment_chunks(cur, judgment_id, j["content"])
+                if j.get("content"):
+                    store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
                 continue
             if store_judgment(cur, j):
                 cur.execute("SELECT id FROM judgments WHERE case_number = %s", (j["case_number"],))
                 row = cur.fetchone()
                 if row:
-                    store_judgment_chunks(cur, row[0], j["content"])
+                    judgment_id = row[0]
+                    store_judgment_chunks(cur, judgment_id, j["content"])
+                    if j.get("content"):
+                        store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                    link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
                 stored += 1
         conn.commit()
     finally:
@@ -542,12 +599,19 @@ def populate_from_saos(
                 cur.execute("SELECT 1 FROM judgment_chunks WHERE judgment_id = %s LIMIT 1", (judgment_id,))
                 if not cur.fetchone() and j.get("content"):
                     store_judgment_chunks(cur, judgment_id, j["content"])
+                if j.get("content"):
+                    store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
                 continue
             if store_judgment(cur, j):
                 cur.execute("SELECT id FROM judgments WHERE case_number = %s", (j["case_number"],))
                 row = cur.fetchone()
                 if row:
-                    store_judgment_chunks(cur, row[0], j["content"])
+                    judgment_id = row[0]
+                    store_judgment_chunks(cur, judgment_id, j["content"])
+                    if j.get("content"):
+                        store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                    link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
                 stored += 1
         conn.commit()
     finally:

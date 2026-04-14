@@ -39,7 +39,21 @@ CREATE INDEX IF NOT EXISTS idx_judgments_court_type ON judgments(court_type);
 CREATE INDEX IF NOT EXISTS idx_judgments_legal_area ON judgments(legal_area);
 CREATE INDEX IF NOT EXISTS idx_judgments_source ON judgments(source);
 
-CREATE INDEX IF NOT EXISTS idx_articles_legal_act ON articles(legal_act_id);
+CREATE TABLE IF NOT EXISTS judgment_references (
+    id SERIAL PRIMARY KEY,
+    judgment_id INTEGER NOT NULL REFERENCES judgments(id) ON DELETE CASCADE,
+    referenced_case_number VARCHAR(100) NOT NULL,
+    referenced_judgment_id INTEGER REFERENCES judgments(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (judgment_id, referenced_case_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_judgment_references_judgment
+    ON judgment_references(judgment_id);
+CREATE INDEX IF NOT EXISTS idx_judgment_references_referenced
+    ON judgment_references(referenced_judgment_id);
+CREATE INDEX IF NOT EXISTS idx_judgment_references_case_number
+    ON judgment_references(referenced_case_number);
 
 CREATE TABLE IF NOT EXISTS legal_acts (
     id SERIAL PRIMARY KEY,
@@ -77,6 +91,8 @@ CREATE TABLE IF NOT EXISTS judgment_chunks (
 CREATE INDEX IF NOT EXISTS idx_judgment_chunks_embedding
     ON judgment_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 CREATE INDEX IF NOT EXISTS idx_judgment_chunks_judgment ON judgment_chunks(judgment_id);
+
+CREATE INDEX IF NOT EXISTS idx_articles_legal_act ON articles(legal_act_id);
 
 CREATE INDEX IF NOT EXISTS idx_articles_embedding
     ON articles USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
