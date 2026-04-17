@@ -7,7 +7,7 @@ from fastapi.security import APIKeyHeader
 
 router = APIRouter()
 api_key_scheme = APIKeyHeader(name="x-internal-key", auto_error=True)
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1-mini")
 
 
 def verify_internal_key(x_internal_key: str = Depends(api_key_scheme)):
@@ -17,8 +17,7 @@ def verify_internal_key(x_internal_key: str = Depends(api_key_scheme)):
 
 def _make_llm_client() -> AsyncOpenAI:
     return AsyncOpenAI(
-        api_key=os.getenv("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1",
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
 
 

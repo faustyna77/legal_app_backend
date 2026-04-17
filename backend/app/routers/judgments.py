@@ -86,3 +86,110 @@ async def similar_judgments(judgment_id: int, limit: int = Query(5, le=20)):
         return [dict(r) for r in rows]
     finally:
         await conn.close()
+
+
+@router.get("/{judgment_id}/regulations")
+async def get_judgment_regulations(judgment_id: int):
+    conn = await get_db_connection()
+    try:
+        exists = await conn.fetchrow("SELECT 1 FROM judgments WHERE id = $1", judgment_id)
+        if not exists:
+            raise HTTPException(status_code=404, detail="Judgment not found")
+
+        rows = await conn.fetch(
+            """
+            SELECT act_title, act_year, articles
+            FROM judgment_regulations
+            WHERE judgment_id = $1
+            ORDER BY id
+            """,
+            judgment_id,
+        )
+
+        grouped: dict[tuple[str, int | None], dict] = {}
+        for row in rows:
+            act_title = row["act_title"]
+            act_year = row["act_year"]
+            key = (act_title, act_year)
+            if key not in grouped:
+                grouped[key] = {
+                    "act_title": act_title,
+                    "act_year": act_year,
+                    "articles": [],
+                }
+            articles = row["articles"] or []
+            for article in articles:
+                if article and article not in grouped[key]["articles"]:
+                    grouped[key]["articles"].append(article)
+
+        return {
+            "judgment_id": judgment_id,
+            "regulations": list(grouped.values()),
+        }
+    finally:
+        await conn.close()
+
+
+@router.get("/{judgment_id}/references")
+async def get_judgment_references(judgment_id: int):
+    conn = await get_db_connection()
+    try:
+        exists = await conn.fetchrow("SELECT 1 FROM judgments WHERE id = $1", judgment_id)
+        if not exists:
+            raise HTTPException(status_code=404, detail="Judgment not found")
+
+        rows_out = await conn.fetch(
+            """
+            SELECT jr.referenced_case_number,
+                   jr.referenced_judgment_id,
+                   j.court,
+                   j.date,
+                   j.source_url
+            FROM judgment_references jr
+            LEFT JOIN judgments j ON j.id = jr.referenced_judgment_id
+            WHERE jr.judgment_id = $1
+            ORDER BY jr.id
+            """,
+            judgment_id,
+        )
+
+        rows_in = await conn.fetch(
+            """
+            SELECT s.id AS judgment_id,
+                   s.case_number,
+                   s.court,
+                   s.date,
+                   s.source_url
+            FROM judgment_references jr
+            JOIN judgments s ON s.id = jr.judgment_id
+            WHERE jr.referenced_judgment_id = $1
+            ORDER BY jr.id
+            """,
+            judgment_id,
+        )
+
+        return {
+            "judgment_id": judgment_id,
+            "references_out": [
+                {
+                    "case_number": r["referenced_case_number"],
+                    "court": r["court"],
+                    "date": r["date"],
+                    "source_url": r["source_url"],
+                    "in_database": r["referenced_judgment_id"] is not None,
+                }
+                for r in rows_out
+            ],
+            "references_in": [
+                {
+                    "judgment_id": r["judgment_id"],
+                    "case_number": r["case_number"],
+                    "court": r["court"],
+                    "date": r["date"],
+                    "source_url": r["source_url"],
+                }
+                for r in rows_in
+            ],
+        }
+    finally:
+        await conn.close()

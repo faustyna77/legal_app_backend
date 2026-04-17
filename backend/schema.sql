@@ -55,6 +55,19 @@ CREATE INDEX IF NOT EXISTS idx_judgment_references_referenced
 CREATE INDEX IF NOT EXISTS idx_judgment_references_case_number
     ON judgment_references(referenced_case_number);
 
+CREATE TABLE IF NOT EXISTS judgment_regulations (
+    id SERIAL PRIMARY KEY,
+    judgment_id INTEGER REFERENCES judgments(id) ON DELETE CASCADE,
+    act_title TEXT NOT NULL,
+    act_year INTEGER,
+    journal_no VARCHAR(50),
+    articles TEXT[],
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_judgment_regulations_judgment
+    ON judgment_regulations(judgment_id);
+
 CREATE TABLE IF NOT EXISTS legal_acts (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
@@ -93,6 +106,15 @@ CREATE INDEX IF NOT EXISTS idx_judgment_chunks_embedding
 CREATE INDEX IF NOT EXISTS idx_judgment_chunks_judgment ON judgment_chunks(judgment_id);
 
 CREATE INDEX IF NOT EXISTS idx_articles_legal_act ON articles(legal_act_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_legal_acts_isap_id
+    ON legal_acts(isap_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_legal_acts_title_year_journal
+    ON legal_acts(lower(btrim(title)), COALESCE(year, -1), COALESCE(lower(btrim(journal_number)), ''));
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_articles_dedup
+    ON articles(legal_act_id, lower(btrim(article_number)), COALESCE(lower(btrim(paragraph)), ''), md5(content));
 
 CREATE INDEX IF NOT EXISTS idx_articles_embedding
     ON articles USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);

@@ -143,13 +143,13 @@ class SAOSScraper:
         if keyword:
             params["all"] = keyword
 
-        response = self.session.get(f"{BASE_URL}/search/judgments", params=params, timeout=15)
+        response = self.session.get(f"{BASE_URL}/search/judgments", params=params, timeout=30)
         response.raise_for_status()
         return response.json()
 
     def fetch_judgment_detail(self, href: str) -> dict | None:
         try:
-            response = self.session.get(href, timeout=15)
+            response = self.session.get(href, timeout=30)
             response.raise_for_status()
             return response.json().get("data", {})
         except requests.RequestException as e:
@@ -164,6 +164,19 @@ class SAOSScraper:
             if val and isinstance(val, list) and val:
                 return " ".join(str(v) for v in val).strip()[:2000]
         return None
+
+    def extract_regulations(self, judgment_data: dict) -> list[dict]:
+        regulations = []
+        for reg in judgment_data.get("referencedRegulations", []):
+            regulations.append(
+                {
+                    "act_title": reg.get("journalTitle", ""),
+                    "act_year": reg.get("journalYear"),
+                    "journal_no": reg.get("journalNo"),
+                    "articles": [art.get("text", "") for art in reg.get("referencedArticles", [])],
+                }
+            )
+        return regulations
 
     def _parse_item(self, item: dict, detail: dict | None = None) -> dict:
         case_numbers = [c.get("caseNumber", "") for c in item.get("courtCases", [])]
@@ -181,11 +194,13 @@ class SAOSScraper:
         if content:
             content = _strip_html(content)
         thesis = None
+        regulations = []
 
         if detail:
             raw_content = detail.get("textContent") or ""
             content = _strip_html(raw_content) if raw_content else content
             thesis = self.extract_thesis(detail)
+            regulations = self.extract_regulations(detail)
             if thesis:
                 thesis = _strip_html(thesis)
             if not legal_area:
@@ -216,6 +231,7 @@ class SAOSScraper:
             "doc_id": str(item.get("id")) if item.get("id") else None,
             "source_url": web_url,
             "source": "saos",
+            "regulations": regulations,
         }
 
     def scrape_range(

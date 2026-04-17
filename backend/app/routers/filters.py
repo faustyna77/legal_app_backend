@@ -189,20 +189,38 @@ async def get_articles(act_title: str = Query(None)):
     try:
         if act_title:
             rows = await conn.fetch("""
-                SELECT DISTINCT a.article_number, la.title AS act_title
-                FROM articles a
-                JOIN legal_acts la ON la.id = a.legal_act_id
-                WHERE la.title ILIKE $1
-                ORDER BY a.article_number
+                SELECT DISTINCT unnest(jr.articles) AS article
+                FROM judgment_regulations jr
+                WHERE jr.act_title ILIKE $1
+                  AND jr.articles IS NOT NULL
+                  AND array_length(jr.articles, 1) > 0
+                ORDER BY article
             """, f"%{act_title}%")
         else:
             rows = await conn.fetch("""
-                SELECT DISTINCT a.article_number, la.title AS act_title
-                FROM articles a
-                JOIN legal_acts la ON la.id = a.legal_act_id
-                ORDER BY la.title, a.article_number
+                SELECT DISTINCT unnest(jr.articles) AS article
+                FROM judgment_regulations jr
+                WHERE jr.articles IS NOT NULL
+                  AND array_length(jr.articles, 1) > 0
+                ORDER BY article
                 LIMIT 200
             """)
-        return {"articles": [{"number": r["article_number"], "act_title": r["act_title"]} for r in rows]}
+        return {"articles": [r["article"] for r in rows]}
+    finally:
+        await conn.close()
+
+@router.get("/filters/act-titles")
+async def get_act_titles():
+    conn = await get_db_connection()
+    try:
+        rows = await conn.fetch("""
+            SELECT DISTINCT act_title, COUNT(*) as count
+            FROM judgment_regulations
+            WHERE act_title IS NOT NULL AND act_title != ''
+            GROUP BY act_title
+            ORDER BY count DESC
+            LIMIT 100
+        """)
+        return {"act_titles": [{"value": r["act_title"], "count": r["count"]} for r in rows]}
     finally:
         await conn.close()

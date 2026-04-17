@@ -1,4 +1,5 @@
 import os
+import re
 from fastapi import APIRouter, HTTPException, Header, Depends
 from pydantic import BaseModel
 from openai import AsyncOpenAI
@@ -7,8 +8,10 @@ from fastapi.security import APIKeyHeader
 
 router = APIRouter()
 api_key_scheme = APIKeyHeader(name="x-internal-key", auto_error=True)
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "jina-embeddings-v3")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1-mini")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+EVIDENCE_QUESTION_PATTERN = re.compile(r"(roszcz|żąd|kwot|ile|odsetk|zapłat|nieważn)", re.IGNORECASE)
+EVIDENCE_SENTENCE_PATTERN = re.compile(r"[^.!?\n]*[^.!?\n]*[^.!?\n]*[.!?]")
 
 
 def verify_internal_key(x_internal_key: str = Depends(api_key_scheme)):
@@ -18,16 +21,65 @@ def verify_internal_key(x_internal_key: str = Depends(api_key_scheme)):
 
 def _make_embed_client() -> AsyncOpenAI:
     return AsyncOpenAI(
-        api_key=os.getenv("JINA_API_KEY"),
-        base_url="https://api.jina.ai/v1",
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
 
 
 def _make_llm_client() -> AsyncOpenAI:
     return AsyncOpenAI(
-        api_key=os.getenv("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1",
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
+
+
+def _build_evidence_quotes(question: str, chunks: list[dict], max_quotes: int = 3) -> list[str]:
+    if not EVIDENCE_QUESTION_PATTERN.search(question or ""):
+        return []
+    quotes: list[str] = []
+    seen = set()
+    for chunk in chunks:
+        for sentence in EVIDENCE_SENTENCE_PATTERN.findall(chunk.get("content") or ""):
+            s = " ".join(sentence.split())
+            sl = s.lower()
+            if not s:
+                continue
+            if not any(k in sl for k in ["powod", "żąda", "żąd", "kwot", "odset", "nieważ", "zapłat"]):
+                continue
+            if s in seen:
+                continue
+            seen.add(s)
+            quotes.append(s)
+            if len(quotes) >= max_quotes:
+                return quotes
+    return quotes
+
+
+def _to_display_chunk(text: str, max_sentences: int = 3, max_chars: int = 900) -> str:
+    normalized = " ".join((text or "").split())
+    if not normalized:
+        return ""
+    if normalized and normalized[0].islower():
+        m = re.search(r"[.!?]\s+", normalized)
+        if m and len(normalized[m.end():]) > 80:
+            normalized = normalized[m.end():]
+    sentences = [" ".join(s.split()) for s in EVIDENCE_SENTENCE_PATTERN.findall(normalized)]
+    if sentences:
+        selected = []
+        size = 0
+        for sentence in sentences[:max_sentences + 2]:
+            if size + len(sentence) > max_chars and selected:
+                break
+            selected.append(sentence)
+            size += len(sentence)
+            if len(selected) >= max_sentences:
+                break
+        if selected:
+            return " ".join(selected)
+    if len(normalized) <= max_chars:
+        return normalized
+    trimmed = normalized[:max_chars]
+    if " " in trimmed:
+        trimmed = trimmed.rsplit(" ", 1)[0]
+    return trimmed
 
 
 class ChatRequest(BaseModel):
@@ -58,7 +110,7 @@ async def chat_with_judgment(
     response = await embed_client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=body.question,
-        extra_body={"task": "retrieval.query"},
+        dimensions=1024,
     )
     embedding = response.data[0].embedding
 
@@ -67,18 +119,48 @@ async def chat_with_judgment(
     try:
         rows = await conn2.fetch(
             """
-            SELECT jc.content,
+            SELECT jc.chunk_index, jc.content,
                    1 - (jc.embedding <=> $1) AS similarity
             FROM judgment_chunks jc
             WHERE jc.judgment_id = $2
               AND jc.embedding IS NOT NULL
             ORDER BY jc.embedding <=> $1
-            LIMIT 5
+            LIMIT 8
             """,
             str(embedding),
             judgment_id,
         )
-        chunks = [dict(r) for r in rows]
+        top_chunks = [dict(r) for r in rows]
+
+        neighbor_indexes = set()
+        for chunk in top_chunks:
+            idx = chunk["chunk_index"]
+            neighbor_indexes.update([idx - 1, idx, idx + 1])
+        neighbor_indexes = sorted(i for i in neighbor_indexes if i >= 0)
+
+        expanded_rows = await conn2.fetch(
+            """
+            SELECT jc.chunk_index, jc.content
+            FROM judgment_chunks jc
+            WHERE jc.judgment_id = $1
+              AND jc.chunk_index = ANY($2::int[])
+            ORDER BY jc.chunk_index
+            """,
+            judgment_id,
+            neighbor_indexes,
+        )
+        expanded_map = {r["chunk_index"]: r["content"] for r in expanded_rows}
+
+        chunks = []
+        for chunk in top_chunks:
+            idx = chunk["chunk_index"]
+            merged = [expanded_map.get(i) for i in [idx - 1, idx, idx + 1] if expanded_map.get(i)]
+            chunks.append(
+                {
+                    "content": "\n\n".join(merged) if merged else chunk["content"],
+                    "similarity": chunk["similarity"],
+                }
+            )
     finally:
         await conn2.close()
 
@@ -113,6 +195,9 @@ async def chat_with_judgment(
                     "Odpowiadaj na pytania wyłącznie na podstawie dostarczonego orzeczenia sądowego. "
                     "Fragmenty mogą zaczynać się w połowie zdania — to normalne, analizuj dostępną treść. "
                     "Jeśli fragment zawiera pole 'Teza:' — użyj go jako głównej odpowiedzi. "
+                    "Jeśli pytanie dotyczy roszczenia, wskaż wyłącznie roszczenie strony powodowej. "
+                    "Nie mieszaj roszczeń powodów z kwotami podawanymi przez pozwanego ani z zarzutem zatrzymania. "
+                    "Jeżeli podajesz kwotę, podaj też krótkie dosłowne uzasadnienie z fragmentu w cudzysłowie. "
                     "Odpowiedź powinna być konkretna i zwięzła. "
                     "Jeśli orzeczenie nie zawiera odpowiedzi na pytanie, napisz: "
                     "'Orzeczenie nie zawiera informacji na ten temat.'"
@@ -129,6 +214,8 @@ async def chat_with_judgment(
         ],
     )
 
+    evidence_quotes = _build_evidence_quotes(body.question, chunks)
+
     return {
         "judgment_id": judgment_id,
         "case_number": judgment_meta["case_number"],
@@ -136,10 +223,11 @@ async def chat_with_judgment(
         "question": body.question,
         "answer": response.choices[0].message.content,
         "chunks_used": len(chunks),
+        "evidence_quotes": evidence_quotes,
        
         "chunks": [
         {
-            "content": chunk["content"],
+            "content": _to_display_chunk(chunk["content"]),
             "similarity": round(chunk["similarity"], 4),
         }
         for chunk in chunks

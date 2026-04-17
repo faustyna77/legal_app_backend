@@ -37,10 +37,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-JINA_API_KEY = os.getenv("JINA_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "jina-embeddings-v3")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1-mini")
 
 
 def get_conn():
@@ -48,27 +47,27 @@ def get_conn():
 
 
 def generate_thesis_with_llm(content: str) -> str | None:
-    if not GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY not set in .env")
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY not set in .env")
     prompt = (
         "Jestes ekspertem prawnym. Na podstawie ponizszej tresci orzeczenia napisz krotka teze "
         "(1-3 zdania) oddajaca glowna mysl prawna orzeczenia. Odpowiedz tylko teza, bez wstepow.\n\n"
         f"Tresc orzeczenia:\n{content[:4000]}"
     )
     response = httpx.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
         json={"model": LLM_MODEL, "temperature": 0.1, "messages": [{"role": "user", "content": prompt}]},
         timeout=30,
     )
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"].strip()
 def generate_summary_with_llm(case_number: str, court: str, date, thesis: str, content: str) -> dict | None:
-    if not GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY not set in .env")
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY not set in .env")
     response = httpx.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
         json={
             "model": LLM_MODEL,
             "temperature": 0.0,
@@ -175,7 +174,124 @@ def backfill_summaries(limit: int = 100) -> int:
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
-CASE_NUMBER_PATTERN = r"\b[IVX]+\s+[A-ZĄĆĘŁŃÓŚŹŻ]{1,6}(?:/[A-ZĄĆĘŁŃÓŚŹŻa-z]{1,6})?\s+\d+[A-Z]?/\d{2,4}\b"
+CASE_NUMBER_PATTERN = r"\b[IVX]+\s+[A-Za-z]+\s+\d+[a-z]?/\d{2,4}\b"
+ARTICLE_MENTION_PATTERN = re.compile(
+    r"\bart\.\s*\d+[a-z]?(?:\s*§\s*\d+[a-z]?)?(?:\s*ust\.\s*\d+[a-z]?)?(?:\s*pkt\s*\d+[a-z]?)?",
+    re.IGNORECASE,
+)
+
+
+def _normalize_article_ref(article: str) -> str:
+    normalized = " ".join((article or "").split())
+    normalized = re.sub(r"^art\.?\s*", "art. ", normalized, flags=re.IGNORECASE)
+    normalized = normalized.strip().rstrip(".,;:")
+    return normalized.lower()
+
+
+def _article_core(article: str) -> str:
+    match = re.search(r"art\.\s*\d+[a-z]?", article, re.IGNORECASE)
+    if not match:
+        return article
+    return " ".join(match.group(0).lower().split())
+
+
+def extract_article_mentions(content: str) -> list[str]:
+    if not content:
+        return []
+    mentions = ARTICLE_MENTION_PATTERN.findall(content)
+    unique: list[str] = []
+    seen = set()
+    for mention in mentions:
+        normalized = _normalize_article_ref(mention)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique.append(normalized)
+    return unique
+
+
+def _load_isap_article_numbers_for_act(cur, act_title: str) -> set[str]:
+    if not act_title:
+        return set()
+
+    cur.execute(
+        """
+        SELECT a.article_number
+        FROM articles a
+        JOIN legal_acts la ON la.id = a.legal_act_id
+        WHERE la.title ILIKE %s
+        """,
+        (f"%{act_title}%",),
+    )
+    rows = cur.fetchall()
+
+    if not rows:
+        keyword = _keyword_from_act_title(act_title)
+        if keyword:
+            cur.execute(
+                """
+                SELECT a.article_number
+                FROM articles a
+                JOIN legal_acts la ON la.id = a.legal_act_id
+                WHERE la.title ILIKE %s
+                """,
+                (f"%{keyword}%",),
+            )
+            rows = cur.fetchall()
+
+    normalized = set()
+    for (article_number,) in rows:
+        value = _normalize_article_ref(article_number or "")
+        if value:
+            normalized.add(value)
+    return normalized
+
+
+def _match_article_mentions_to_act(cur, act_title: str, article_mentions: list[str]) -> list[str]:
+    if not article_mentions:
+        return []
+    isap_article_numbers = _load_isap_article_numbers_for_act(cur, act_title)
+    if not isap_article_numbers:
+        return []
+    isap_cores = {_article_core(article) for article in isap_article_numbers}
+
+    matched: list[str] = []
+    seen = set()
+    for mention in article_mentions:
+        core = _article_core(mention)
+        if mention in isap_article_numbers or core in isap_cores:
+            if mention not in seen:
+                seen.add(mention)
+                matched.append(mention)
+    return matched
+
+
+def enrich_regulations_articles(cur, regulations: list[dict], content: str | None) -> list[dict]:
+    if not regulations:
+        return []
+
+    article_mentions = extract_article_mentions(content or "")
+    enriched: list[dict] = []
+
+    for reg in regulations:
+        item = dict(reg)
+        existing_articles = []
+        for article in item.get("articles", []) or []:
+            normalized = _normalize_article_ref(article)
+            if normalized and normalized not in existing_articles:
+                existing_articles.append(normalized)
+
+        if existing_articles:
+            item["articles"] = existing_articles
+            enriched.append(item)
+            continue
+
+        mapped_articles = _match_article_mentions_to_act(cur, item.get("act_title", ""), article_mentions)
+        if not mapped_articles:
+            mapped_articles = article_mentions
+        item["articles"] = mapped_articles
+        enriched.append(item)
+
+    return enriched
 
 
 def extract_referenced_case_numbers(content: str) -> list[str]:
@@ -211,6 +327,24 @@ def store_judgment_references(cur, judgment_id: int, case_number: str, content: 
             SET referenced_judgment_id = COALESCE(judgment_references.referenced_judgment_id, EXCLUDED.referenced_judgment_id)
             """,
             (judgment_id, referenced_case_number, referenced_judgment_id),
+        )
+
+
+def store_judgment_regulations(cur, judgment_id: int, regulations: list[dict]):
+    for reg in regulations:
+        cur.execute(
+            """
+            INSERT INTO judgment_regulations
+            (judgment_id, act_title, act_year, journal_no, articles)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                judgment_id,
+                reg["act_title"],
+                reg.get("act_year"),
+                reg.get("journal_no"),
+                reg.get("articles", []),
+            ),
         )
 
 
@@ -278,21 +412,36 @@ def store_judgment(cur, judgment: dict) -> bool:
         return False
 
 
+def generate_openai_embeddings(texts: list[str]) -> list[list[float]]:
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY not set in .env")
+    attempts = 6
+    for attempt in range(1, attempts + 1):
+        try:
+            response = httpx.post(
+                "https://api.openai.com/v1/embeddings",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json={"model": EMBEDDING_MODEL, "input": texts, "dimensions": 1024},
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return [item["embedding"] for item in data["data"]]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 429 or attempt == attempts:
+                raise
+            retry_after = e.response.headers.get("retry-after")
+            sleep_seconds = float(retry_after) if retry_after and retry_after.isdigit() else min(2 ** attempt, 30)
+            logger.warning("Embedding rate limited (429), retrying in %.1fs (attempt %d/%d)", sleep_seconds, attempt, attempts)
+            time.sleep(sleep_seconds)
+    raise RuntimeError("Embedding request failed after retries")
+
+
 def generate_jina_embeddings(texts: list[str]) -> list[list[float]]:
-    if not JINA_API_KEY:
-        raise ValueError("JINA_API_KEY not set in .env")
-    response = httpx.post(
-        "https://api.jina.ai/v1/embeddings",
-        headers={"Authorization": f"Bearer {JINA_API_KEY}", "Content-Type": "application/json"},
-        json={"model": EMBEDDING_MODEL, "input": texts, "task": "retrieval.passage"},
-        timeout=60,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return [item["embedding"] for item in data["data"]]
+    return generate_openai_embeddings(texts)
 
 
-def embed_pending_chunks(batch_size: int = 50):
+def embed_pending_chunks(batch_size: int = 10):
     conn = get_conn()
     cur = conn.cursor()
     total = 0
@@ -308,7 +457,7 @@ def embed_pending_chunks(batch_size: int = 50):
             ids = [r[0] for r in rows]
             texts = [r[1][:8000] for r in rows]
             try:
-                embeddings = generate_jina_embeddings(texts)
+                embeddings = generate_openai_embeddings(texts)
             except Exception as e:
                 logger.error("Embedding batch failed: %s", e)
                 break
@@ -328,7 +477,7 @@ def embed_pending_chunks(batch_size: int = 50):
     return total
 
 
-def embed_pending_judgments(batch_size: int = 50):
+def embed_pending_judgments(batch_size: int = 10):
     conn = get_conn()
     cur = conn.cursor()
     total = 0
@@ -346,7 +495,7 @@ def embed_pending_judgments(batch_size: int = 50):
             texts = [r[1][:8000] for r in rows]
 
             try:
-                embeddings = generate_jina_embeddings(texts)
+                embeddings = generate_openai_embeddings(texts)
             except Exception as e:
                 logger.error("Embedding batch failed: %s", e)
                 break
@@ -369,7 +518,7 @@ def embed_pending_judgments(batch_size: int = 50):
     return total
 
 
-def embed_pending_legal_acts(batch_size: int = 50):
+def embed_pending_legal_acts(batch_size: int = 10):
     conn = get_conn()
     cur = conn.cursor()
     total = 0
@@ -385,7 +534,7 @@ def embed_pending_legal_acts(batch_size: int = 50):
             ids = [r[0] for r in rows]
             texts = [r[1][:8000] for r in rows]
             try:
-                embeddings = generate_jina_embeddings(texts)
+                embeddings = generate_openai_embeddings(texts)
             except Exception as e:
                 logger.error("Embedding batch failed: %s", e)
                 break
@@ -407,32 +556,73 @@ def embed_pending_legal_acts(batch_size: int = 50):
 
 def store_legal_act(cur, act: dict) -> int | None:
     try:
-        cur.execute(
-            """
-            INSERT INTO legal_acts (title, type, source_url, year, isap_id, journal_number)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                act["title"],
-                act.get("type", "ustawa"),
-                act.get("source_url"),
-                act.get("year"),
-                act.get("isap_id"),
-                act.get("journal_number"),
-            ),
-        )
-        row = cur.fetchone()
-        if not row:
+        isap_id = act.get("isap_id")
+        title = act["title"]
+        act_type = act.get("type", "ustawa")
+        source_url = act.get("source_url")
+        act_year = act.get("year")
+        journal_number = act.get("journal_number")
+
+        if isap_id:
+            cur.execute(
+                """
+                INSERT INTO legal_acts (title, type, source_url, year, isap_id, journal_number)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (isap_id) DO UPDATE
+                SET title = EXCLUDED.title,
+                    type = EXCLUDED.type,
+                    source_url = COALESCE(EXCLUDED.source_url, legal_acts.source_url),
+                    year = COALESCE(EXCLUDED.year, legal_acts.year),
+                    journal_number = COALESCE(EXCLUDED.journal_number, legal_acts.journal_number)
+                RETURNING id
+                """,
+                (title, act_type, source_url, act_year, isap_id, journal_number),
+            )
+            row = cur.fetchone()
+            act_id = row[0] if row else None
+        else:
+            cur.execute(
+                """
+                SELECT id FROM legal_acts
+                WHERE lower(btrim(title)) = lower(btrim(%s))
+                  AND COALESCE(year, -1) = COALESCE(%s, -1)
+                  AND COALESCE(lower(btrim(journal_number)), '') = COALESCE(lower(btrim(%s)), '')
+                LIMIT 1
+                """,
+                (title, act_year, journal_number),
+            )
+            row = cur.fetchone()
+            if row:
+                act_id = row[0]
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO legal_acts (title, type, source_url, year, isap_id, journal_number)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (title, act_type, source_url, act_year, None, journal_number),
+                )
+                row = cur.fetchone()
+                act_id = row[0] if row else None
+
+        if not act_id:
             return None
-        act_id = row[0]
+
         for article in act.get("articles", []):
             cur.execute(
                 """
                 INSERT INTO articles (legal_act_id, article_number, paragraph, content)
-                VALUES (%s, %s, %s, %s)
+                SELECT %s, %s, %s, %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM articles
+                    WHERE legal_act_id = %s
+                      AND lower(btrim(article_number)) = lower(btrim(%s))
+                      AND COALESCE(lower(btrim(paragraph)), '') = COALESCE(lower(btrim(%s)), '')
+                      AND content = %s
+                )
                 """,
-                (act_id, article["number"], article.get("paragraph"), article["content"]),
+                (act_id, article["number"], article.get("paragraph"), article["content"], act_id, article["number"], article.get("paragraph"), article["content"]),
             )
         return act_id
     except Exception as e:
@@ -440,7 +630,7 @@ def store_legal_act(cur, act: dict) -> int | None:
         return None
 
 
-def embed_pending_articles(batch_size: int = 50):
+def embed_pending_articles(batch_size: int = 10):
     conn = get_conn()
     cur = conn.cursor()
     total = 0
@@ -456,7 +646,7 @@ def embed_pending_articles(batch_size: int = 50):
             ids = [r[0] for r in rows]
             texts = [r[1][:8000] for r in rows]
             try:
-                embeddings = generate_jina_embeddings(texts)
+                embeddings = generate_openai_embeddings(texts)
             except Exception as e:
                 logger.error("Embedding batch failed: %s", e)
                 break
@@ -496,8 +686,44 @@ def populate_from_isap(keyword: str, limit: int) -> int:
     return stored
 
 
+def _keyword_from_act_title(act_title: str) -> str:
+    if not act_title:
+        return ""
+    title = act_title
+    if " - " in title:
+        title = title.split(" - ", 1)[1]
+    title = re.sub(r"^Ustawa z dnia .*?\s+", "", title, flags=re.IGNORECASE).strip()
+    return title[:120]
+
+
+def ensure_isap_act_for_regulation(cur, isap: ISAPScraper, act_title: str, force_refresh: bool = False):
+    if not act_title or act_title.startswith("Nieustalony akt"):
+        return
+
+    cur.execute("SELECT id FROM legal_acts WHERE title ILIKE %s LIMIT 1", (f"%{act_title}%",))
+    existing = cur.fetchone()
+    if existing and not force_refresh:
+        return
+
+    keyword = _keyword_from_act_title(act_title)
+    if not keyword:
+        return
+
+    try:
+        acts = isap.search_acts(keyword=keyword, limit=1)
+    except Exception as e:
+        logger.warning("ISAP lookup failed for '%s': %s", act_title, e)
+        return
+
+    if not acts:
+        return
+
+    store_legal_act(cur, acts[0])
+
+
 def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
     scraper = NSAScraper(delay=1.0)
+   
     logger.info("Fetching from NSA: date_from=%s date_to=%s limit=%d", date_from, date_to, limit)
     judgments = scraper.scrape_range(date_from, date_to, limit=limit)
     logger.info("Fetched %d judgments from NSA", len(judgments))
@@ -515,16 +741,12 @@ def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
                     store_judgment_chunks(cur, judgment_id, j["content"])
                 if j.get("content"):
                     store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
-                link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
-                continue
-            if store_judgment(cur, j):
-                cur.execute("SELECT id FROM judgments WHERE case_number = %s", (j["case_number"],))
-                row = cur.fetchone()
-                if row:
-                    judgment_id = row[0]
-                    store_judgment_chunks(cur, judgment_id, j["content"])
-                    if j.get("content"):
-                        store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                if j.get("regulations"):
+                    regulations = enrich_regulations_articles(cur, j.get("regulations", []), j.get("content"))
+                    store_judgment_regulations(cur, judgment_id, regulations)
+                    
+
+                       
                     link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
                 stored += 1
         conn.commit()
@@ -535,6 +757,17 @@ def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
     return stored
 
 
+
+def _resolve_saos_detail_url(source_url: str | None, doc_id: str | None) -> str | None:
+    if source_url and "/api/judgments/" in source_url:
+        return source_url
+    if source_url and "/judgments/" in source_url:
+        return source_url.replace("/judgments/", "/api/judgments/")
+    if doc_id:
+        return f"https://www.saos.org.pl/api/judgments/{doc_id}"
+    return None
+
+
 def backfill_thesis_from_saos(limit: int = 100) -> int:
     scraper = SAOSScraper(delay=0.5)
     conn = get_conn()
@@ -542,13 +775,16 @@ def backfill_thesis_from_saos(limit: int = 100) -> int:
     updated = 0
     try:
         cur.execute(
-            "SELECT id, source_url FROM judgments WHERE thesis IS NULL AND source_url LIKE %s LIMIT %s",
-            ("%saos.org.pl%", limit),
+            "SELECT id, source_url, doc_id FROM judgments WHERE thesis IS NULL AND source = %s LIMIT %s",
+            ("saos", limit),
         )
         rows = cur.fetchall()
         logger.info("Found %d judgments with NULL thesis to backfill", len(rows))
-        for row_id, source_url in rows:
-            detail = scraper.fetch_judgment_detail(source_url)
+        for row_id, source_url, doc_id in rows:
+            detail_url = _resolve_saos_detail_url(source_url, doc_id)
+            if not detail_url:
+                continue
+            detail = scraper.fetch_judgment_detail(detail_url)
             if not detail:
                 time.sleep(scraper.delay)
                 continue
@@ -566,6 +802,217 @@ def backfill_thesis_from_saos(limit: int = 100) -> int:
     return updated
 
 
+def backfill_regulations(limit: int = 200) -> int:
+    scraper = SAOSScraper(delay=0.5)
+    
+    conn = get_conn()
+    cur = conn.cursor()
+    updated = 0
+    try:
+        cur.execute(
+            """
+            SELECT j.id, j.source_url, j.doc_id, j.content
+            FROM judgments j
+            LEFT JOIN judgment_regulations jr ON jr.judgment_id = j.id
+            WHERE j.source = %s AND jr.id IS NULL
+            LIMIT %s
+            """,
+            ("saos", limit),
+        )
+        rows = cur.fetchall()
+        logger.info("Found %d judgments without regulations", len(rows))
+        for judgment_id, source_url, doc_id, content in rows:
+            detail_url = _resolve_saos_detail_url(source_url, doc_id)
+            if not detail_url:
+                continue
+            detail = scraper.fetch_judgment_detail(detail_url)
+            if not detail:
+                time.sleep(scraper.delay)
+                continue
+            regulations = scraper.extract_regulations(detail)
+            regulations = enrich_regulations_articles(cur, regulations, content)
+            if regulations:
+                store_judgment_regulations(cur, judgment_id, regulations)
+                
+                updated += 1
+                logger.info("Stored regulations for id=%d", judgment_id)
+            time.sleep(scraper.delay)
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    logger.info("Backfilled regulations for %d judgments", updated)
+    return updated
+
+
+def backfill_references(limit: int = 200) -> int:
+    conn = get_conn()
+    cur = conn.cursor()
+    updated = 0
+    try:
+        cur.execute(
+            """
+            SELECT j.id, j.case_number, j.content
+            FROM judgments j
+            LEFT JOIN judgment_references jr ON jr.judgment_id = j.id
+            WHERE jr.id IS NULL AND j.content IS NOT NULL AND j.content != ''
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+        logger.info("Found %d judgments without references", len(rows))
+        for judgment_id, case_number, content in rows:
+            store_judgment_references(cur, judgment_id, case_number, content)
+            link_references_to_existing_judgment(cur, case_number, judgment_id)
+            updated += 1
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    logger.info("Backfilled references for %d judgments", updated)
+    return updated
+
+
+def backfill_nsa_regulations(limit: int = 200) -> int:
+    scraper = NSAScraper(delay=0.1)
+    
+    conn = get_conn()
+    cur = conn.cursor()
+    updated = 0
+    try:
+        cur.execute(
+            """
+            SELECT j.id, j.content
+            FROM judgments j
+            LEFT JOIN judgment_regulations jr ON jr.judgment_id = j.id
+            WHERE j.source = 'nsa' AND jr.id IS NULL
+              AND j.content IS NOT NULL AND j.content != ''
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+        logger.info("Found %d NSA judgments without regulations", len(rows))
+        for judgment_id, content in rows:
+            regulations = scraper.extract_regulations(content)
+            if not regulations:
+                continue
+            store_judgment_regulations(cur, judgment_id, regulations)
+            
+            updated += 1
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    logger.info("Backfilled NSA regulations for %d judgments", updated)
+    return updated
+
+
+def backfill_isap_acts_for_regulations(limit: int = 500) -> int:
+    isap = ISAPScraper(delay=0.2)
+    conn = get_conn()
+    cur = conn.cursor()
+    updated = 0
+    try:
+        cur.execute(
+            """
+            SELECT DISTINCT jr.act_title
+            FROM judgment_regulations jr
+            JOIN judgments j ON j.id = jr.judgment_id
+            WHERE j.source = 'saos'
+              AND jr.act_title IS NOT NULL
+              AND jr.act_title <> ''
+            ORDER BY jr.act_title
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+        logger.info("Found %d SAOS regulation acts to ensure in ISAP", len(rows))
+
+        for (act_title,) in rows:
+            cur.execute("SELECT id FROM legal_acts WHERE title ILIKE %s LIMIT 1", (f"%{act_title}%",))
+            had_before = cur.fetchone() is not None
+            
+            cur.execute("SELECT id FROM legal_acts WHERE title ILIKE %s LIMIT 1", (f"%{act_title}%",))
+            has_after = cur.fetchone() is not None
+            if not had_before and has_after:
+                updated += 1
+
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+    logger.info("Backfilled ISAP acts for %d SAOS regulation titles", updated)
+    return updated
+
+
+def backfill_saos_regulation_articles(limit: int = 200) -> int:
+    conn = get_conn()
+    cur = conn.cursor()
+    updated = 0
+    try:
+        cur.execute(
+            """
+            SELECT DISTINCT j.id, j.content
+            FROM judgments j
+            JOIN judgment_regulations jr ON jr.judgment_id = j.id
+            WHERE j.source = 'saos'
+              AND (jr.articles IS NULL OR array_length(jr.articles, 1) IS NULL)
+              AND j.content IS NOT NULL AND j.content != ''
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        judgments = cur.fetchall()
+        logger.info("Found %d SAOS judgments with empty regulation articles", len(judgments))
+
+        for judgment_id, content in judgments:
+            cur.execute(
+                """
+                SELECT id, act_title, act_year, journal_no, articles
+                FROM judgment_regulations
+                WHERE judgment_id = %s
+                ORDER BY id
+                """,
+                (judgment_id,),
+            )
+            regs_rows = cur.fetchall()
+
+            regulations = []
+            reg_ids = []
+            for reg_id, act_title, act_year, journal_no, articles in regs_rows:
+                reg_ids.append(reg_id)
+                regulations.append(
+                    {
+                        "act_title": act_title or "",
+                        "act_year": act_year,
+                        "journal_no": journal_no,
+                        "articles": articles or [],
+                    }
+                )
+
+            enriched_regs = enrich_regulations_articles(cur, regulations, content)
+            for reg_id, reg in zip(reg_ids, enriched_regs):
+                mapped_articles = reg.get("articles", []) or []
+                if not mapped_articles:
+                    continue
+                cur.execute(
+                    "UPDATE judgment_regulations SET articles = %s WHERE id = %s",
+                    (mapped_articles, reg_id),
+                )
+                updated += 1
+
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    logger.info("Backfilled SAOS regulation articles for %d rows", updated)
+    return updated
+
+
 def populate_from_saos(
     date_from: str,
     date_to: str,
@@ -574,6 +1021,7 @@ def populate_from_saos(
     limit: int,
 ) -> int:
     scraper = SAOSScraper(delay=0.5)
+   
     logger.info(
         "Fetching from SAOS: date_from=%s date_to=%s court_type=%s keyword=%s limit=%d",
         date_from, date_to, court_type, keyword, limit,
@@ -601,6 +1049,8 @@ def populate_from_saos(
                     store_judgment_chunks(cur, judgment_id, j["content"])
                 if j.get("content"):
                     store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                if j.get("regulations"):
+                    store_judgment_regulations(cur, judgment_id, j.get("regulations", []))
                 link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
                 continue
             if store_judgment(cur, j):
@@ -611,6 +1061,10 @@ def populate_from_saos(
                     store_judgment_chunks(cur, judgment_id, j["content"])
                     if j.get("content"):
                         store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                    if j.get("regulations"):
+                        regulations = enrich_regulations_articles(cur, j.get("regulations", []), j.get("content"))
+                        store_judgment_regulations(cur, judgment_id, regulations)
+                       
                     link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
                 stored += 1
         conn.commit()
@@ -630,10 +1084,15 @@ def main():
     parser.add_argument("--court-type", default=None, help="[saos] SUPREME_COURT | COMMON_COURT | ADMINISTRATIVE_COURT")
     parser.add_argument("--keyword", default=None, help="[saos, isap] keyword filter")
     parser.add_argument("--limit", type=int, default=200)
-    parser.add_argument("--embed", action="store_true", help="Generate Jina embeddings after storing")
+    parser.add_argument("--embed", action="store_true", help="Generate OpenAI embeddings after storing")
     parser.add_argument("--backfill-thesis", action="store_true", help="Backfill NULL thesis from SAOS detail endpoint")
-    parser.add_argument("--backfill-thesis-llm", action="store_true", help="Backfill NULL thesis using Groq LLM from content")
+    parser.add_argument("--backfill-thesis-llm", action="store_true", help="Backfill NULL thesis using OpenAI LLM from content")
     parser.add_argument("--backfill-summaries", action="store_true", help="Generate summaries for judgments without summary")
+    parser.add_argument("--backfill-regulations", action="store_true", help="Backfill missing regulations from SAOS detail endpoint")
+    parser.add_argument("--backfill-references", action="store_true", help="Backfill missing judgment references from content")
+    parser.add_argument("--backfill-nsa-regulations", action="store_true", help="Backfill NSA regulations from content regex + ISAP lookup")
+    parser.add_argument("--backfill-isap-acts-for-regulations", action="store_true", help="Backfill missing legal_acts/articles from ISAP for SAOS regulation titles")
+    parser.add_argument("--backfill-saos-regulation-articles", action="store_true", help="Backfill empty SAOS regulation articles from judgment content + ISAP article mapping")
     args = parser.parse_args()
 
     if not DATABASE_URL:
@@ -646,12 +1105,37 @@ def main():
         return
 
     if args.backfill_thesis_llm:
-        logger.info("Backfilling thesis via Groq LLM...")
+        logger.info("Backfilling thesis via OpenAI LLM...")
         backfill_thesis_with_llm(limit=args.limit)
         return
     if args.backfill_summaries:
-        logger.info("Backfilling summaries via Groq LLM...")
+        logger.info("Backfilling summaries via OpenAI LLM...")
         backfill_summaries(limit=args.limit)
+        return
+
+    if args.backfill_regulations:
+        logger.info("Backfilling regulations from SAOS detail endpoint...")
+        backfill_regulations(limit=args.limit)
+        return
+
+    if args.backfill_references:
+        logger.info("Backfilling references from judgment content...")
+        backfill_references(limit=args.limit)
+        return
+
+    if args.backfill_nsa_regulations:
+        logger.info("Backfilling NSA regulations from judgment content...")
+        backfill_nsa_regulations(limit=args.limit)
+        return
+
+    if args.backfill_isap_acts_for_regulations:
+        logger.info("Backfilling ISAP legal acts for SAOS regulation titles...")
+        backfill_isap_acts_for_regulations(limit=args.limit)
+        return
+
+    if args.backfill_saos_regulation_articles:
+        logger.info("Backfilling SAOS regulation articles from judgment content + ISAP mapping...")
+        backfill_saos_regulation_articles(limit=args.limit)
         return
 
     if args.source == "saos":

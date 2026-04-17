@@ -10,6 +10,27 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://orzeczenia.nsa.gov.pl"
 
+_ARTICLE_PATTERN = re.compile(
+    r"\bart\.\s*\d+[a-z]?(?:\s*§\s*\d+[a-z]?)?(?:\s*ust\.\s*\d+[a-z]?)?(?:\s*pkt\s*\d+[a-z]?)?",
+    re.IGNORECASE,
+)
+
+_ACT_KEYWORDS = {
+    "prawo bankowe": "Ustawa z dnia 29 sierpnia 1997 r. - Prawo bankowe",
+    "kodeks cywilny": "Ustawa z dnia 23 kwietnia 1964 r. - Kodeks cywilny",
+    "kodeks postępowania cywilnego": "Ustawa z dnia 17 listopada 1964 r. - Kodeks postępowania cywilnego",
+    "kodeks postepowania cywilnego": "Ustawa z dnia 17 listopada 1964 r. - Kodeks postępowania cywilnego",
+    "kodeks postępowania administracyjnego": "Ustawa z dnia 14 czerwca 1960 r. - Kodeks postępowania administracyjnego",
+    "kodeks postepowania administracyjnego": "Ustawa z dnia 14 czerwca 1960 r. - Kodeks postępowania administracyjnego",
+    "ordynacja podatkowa": "Ustawa z dnia 29 sierpnia 1997 r. - Ordynacja podatkowa",
+    "prawo o postępowaniu przed sądami administracyjnymi": "Ustawa z dnia 30 sierpnia 2002 r. - Prawo o postępowaniu przed sądami administracyjnymi",
+    "prawo o postepowaniu przed sadami administracyjnymi": "Ustawa z dnia 30 sierpnia 2002 r. - Prawo o postępowaniu przed sądami administracyjnymi",
+    "p.p.s.a": "Ustawa z dnia 30 sierpnia 2002 r. - Prawo o postępowaniu przed sądami administracyjnymi",
+    "k.p.a": "Ustawa z dnia 14 czerwca 1960 r. - Kodeks postępowania administracyjnego",
+    "k.p.c": "Ustawa z dnia 17 listopada 1964 r. - Kodeks postępowania cywilnego",
+    "k.c": "Ustawa z dnia 23 kwietnia 1964 r. - Kodeks cywilny",
+}
+
 
 class NSAScraper:
     def __init__(self, delay: float = 1.0):
@@ -18,10 +39,55 @@ class NSAScraper:
         self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
         self.session.verify = False
 
+    @staticmethod
+    def _normalize_article(article: str) -> str:
+        normalized = " ".join((article or "").split())
+        return normalized.lower().strip()
+
+    def extract_regulations(self, content: str) -> list[dict]:
+        if not content:
+            return []
+
+        found_articles = _ARTICLE_PATTERN.findall(content)
+        seen = set()
+        articles = []
+        for article in found_articles:
+            normalized = self._normalize_article(article)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                articles.append(normalized)
+
+        content_l = content.lower()
+        regulations = []
+        seen_acts = set()
+        for keyword, act_title in _ACT_KEYWORDS.items():
+            if keyword in content_l and act_title not in seen_acts:
+                seen_acts.add(act_title)
+                regulations.append(
+                    {
+                        "act_title": act_title,
+                        "act_year": None,
+                        "journal_no": None,
+                        "articles": articles,
+                    }
+                )
+
+        if articles and not regulations:
+            regulations.append(
+                {
+                    "act_title": "Nieustalony akt prawny (NSA regex)",
+                    "act_year": None,
+                    "journal_no": None,
+                    "articles": articles,
+                }
+            )
+
+        return regulations
+
     def scrape_judgment(self, doc_id: str) -> dict | None:
         url = f"{BASE_URL}/doc/{doc_id}"
         try:
-            response = self.session.get(url, timeout=15)
+            response = self.session.get(url, timeout=30)
             response.raise_for_status()
         except requests.RequestException as e:
             logger.error("Failed to fetch %s: %s", url, e)
@@ -53,12 +119,14 @@ class NSAScraper:
                 if city_m2:
                     city = city_m2.group(1).strip()
 
-        content_tag = soup.find("span", class_="info-list-value-uzasadnienie")
-        if not content_tag:
+        content_tags = soup.find_all("span", class_="info-list-value-uzasadnienie")
+        if not content_tags:
             logger.warning("No content found for %s", doc_id)
             return None
 
-        content = content_tag.get_text(separator="\n").strip()
+        content_parts = [tag.get_text(separator="\n").strip() for tag in content_tags if tag.get_text(strip=True)]
+        content = "\n\n".join(content_parts).strip()
+        regulations = self.extract_regulations(content)
 
         thesis_tag = soup.find("span", class_="info-list-value-teza")
         thesis = thesis_tag.get_text(separator="\n").strip() if thesis_tag else None
@@ -82,6 +150,7 @@ class NSAScraper:
             "source_url": url,
             "source": "nsa",
             "legal_area": "administracyjne",
+            "regulations": regulations,
         }
 
     def scrape_range(self, date_from: str, date_to: str, limit: int = 500) -> list[dict]:
@@ -94,7 +163,7 @@ class NSAScraper:
                 response = self.session.get(
                     f"{BASE_URL}/cbo/find",
                     params={"p": page},
-                    timeout=15,
+                    timeout=30,
                 )
                 response.raise_for_status()
             except requests.RequestException as e:

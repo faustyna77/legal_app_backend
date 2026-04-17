@@ -5,15 +5,16 @@ from openai import AsyncOpenAI
 
 router = APIRouter()
 
-client = AsyncOpenAI(
-    api_key=os.getenv("JINA_API_KEY"),
-    base_url="https://api.jina.ai/v1",
-)
+
+def _make_client() -> AsyncOpenAI:
+    return AsyncOpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+    )
 
 
 class EmbedRequest(BaseModel):
     texts: list[str]
-    model: str = "jina-embeddings-v3"
+    model: str = "text-embedding-3-small"
 
 
 def verify_internal_key(x_internal_key: str = Header(...)):
@@ -26,8 +27,10 @@ async def embed(
     body: EmbedRequest,
     _: None = Depends(verify_internal_key),
 ):
+    client = _make_client()
     response = await client.embeddings.create(
         model=body.model,
         input=body.texts,
+        dimensions=1024,
     )
     return {"embeddings": [item.embedding for item in response.data]}

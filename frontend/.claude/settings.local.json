@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -f config/env.ts services/http.ts services/legalApi.ts components/layout/MainLayout.tsx components/layout/Topbar.tsx components/search/FiltersSidebar.tsx components/search/SearchResultsPanel.tsx components/search/SearchToolbar.tsx components/details/JudgmentDetailsPanel.tsx pages/JudgmentsPage.tsx App.css index.css)",
+      "Bash(rmdir services *)"
+    ]
+  }
+}

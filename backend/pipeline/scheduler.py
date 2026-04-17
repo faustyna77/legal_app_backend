@@ -1,6 +1,7 @@
 import logging
 import os
-from datetime import date
+from datetime import date,timedelta
+
 
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -10,6 +11,8 @@ from pipeline.populate_db import (
     get_conn,
     populate_from_nsa,
     populate_from_saos,
+    backfill_references,
+    backfill_saos_regulation_articles,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -69,11 +72,14 @@ def _embed_full_for_next_judgments(judgment_limit: int, batch_size: int = 50) ->
 
 
 def run_saos_job() -> None:
-    date_from = os.getenv("INGEST_SAOS_DATE_FROM", "2024-01-01")
+    date_from = os.getenv(
+        "INGEST_SAOS_DATE_FROM",
+        (date.today() - timedelta(days=90)).strftime("%Y-%m-%d")
+    )
     date_to = str(date.today())
-    fetch_limit = _int_env("INGEST_SAOS_LIMIT", 50)
-    embed_judgment_limit = _int_env("INGEST_EMBED_JUDGMENTS_LIMIT", 20)
-    embed_batch_size = _int_env("INGEST_EMBED_BATCH_SIZE", 50)
+    fetch_limit = _int_env("INGEST_SAOS_LIMIT", 200)
+    embed_judgment_limit = _int_env("INGEST_EMBED_JUDGMENTS_LIMIT", 100)
+    embed_batch_size = _int_env("INGEST_EMBED_BATCH_SIZE", 100)
     court_type = os.getenv("INGEST_SAOS_COURT_TYPE") or None
     keyword = os.getenv("INGEST_SAOS_KEYWORD") or None
 
@@ -85,6 +91,8 @@ def run_saos_job() -> None:
         keyword=keyword,
         limit=fetch_limit,
     )
+    backfill_references(limit=500)
+    backfill_saos_regulation_articles(limit=500)
     embedded_judgments, embedded_chunks = _embed_full_for_next_judgments(embed_judgment_limit, embed_batch_size)
     logger.info(
         "SAOS job done: stored=%d embedded_judgments=%d embedded_chunks=%d",
@@ -95,14 +103,20 @@ def run_saos_job() -> None:
 
 
 def run_nsa_job() -> None:
-    date_from = os.getenv("INGEST_NSA_DATE_FROM", "2024-01-01")
+    date_from = os.getenv(
+        "INGEST_NSA_DATE_FROM",
+        (date.today() - timedelta(days=2)).strftime("%Y-%m-%d")
+    )
+    
     date_to = str(date.today())
-    fetch_limit = _int_env("INGEST_NSA_LIMIT", 50)
-    embed_judgment_limit = _int_env("INGEST_EMBED_JUDGMENTS_LIMIT", 20)
-    embed_batch_size = _int_env("INGEST_EMBED_BATCH_SIZE", 50)
+    fetch_limit = _int_env("INGEST_NSA_LIMIT", 200)
+    embed_judgment_limit = _int_env("INGEST_EMBED_JUDGMENTS_LIMIT", 100)
+    embed_batch_size = _int_env("INGEST_EMBED_BATCH_SIZE", 100)
 
     logger.info("Starting NSA ingestion job")
     stored = populate_from_nsa(date_from=date_from, date_to=date_to, limit=fetch_limit)
+    backfill_references(limit=500)
+   
     embedded_judgments, embedded_chunks = _embed_full_for_next_judgments(embed_judgment_limit, embed_batch_size)
     logger.info(
         "NSA job done: stored=%d embedded_judgments=%d embedded_chunks=%d",

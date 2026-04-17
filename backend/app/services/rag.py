@@ -1,24 +1,37 @@
 import os
+import re
+from datetime import date, datetime
 from openai import AsyncOpenAI
 from app.db import get_db_connection
 
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "jina-embeddings-v3")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1-mini")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.3"))
+CASE_NUMBER_QUERY_PATTERN = re.compile(r"\b[IVX]+\s+[A-ZĄĆĘŁŃÓŚŹŻ]{1,6}(?:/[A-ZĄĆĘŁŃÓŚŹŻa-z]{1,6})?\s+\d+[A-Z]?/\d{2,4}\b", re.IGNORECASE)
 
 
 def _make_embed_client() -> AsyncOpenAI:
     return AsyncOpenAI(
-        api_key=os.getenv("JINA_API_KEY"),
-        base_url="https://api.jina.ai/v1",
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
 
 
 def _make_llm_client() -> AsyncOpenAI:
     return AsyncOpenAI(
-        api_key=os.getenv("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1",
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
+
+
+def _parse_filter_date(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        return date.fromisoformat(value)
+    return value
 
 
 class RAGService:
@@ -27,12 +40,17 @@ class RAGService:
         self.llm_client = _make_llm_client()
 
     async def search(self, query: str, filters: dict) -> dict:
+        case_number_hits = await self._search_by_case_number(query, filters)
         embedding = await self._embed(query)
         judgments = await self._search_judgment_chunks(embedding, filters, top_k=10)
         articles = await self._search_articles(embedding, filters, top_k=5)
 
         judgments = [d for d in judgments if (d.get("similarity") or 0) >= SIMILARITY_THRESHOLD]
         articles = [d for d in articles if (d.get("similarity") or 0) >= SIMILARITY_THRESHOLD]
+
+        for hit in reversed(case_number_hits):
+            if not any(j["id"] == hit["id"] for j in judgments):
+                judgments.insert(0, hit)
 
         seen_counts = {}
         filtered_judgments = []
@@ -42,6 +60,7 @@ class RAGService:
             if seen_counts[jid] <= 3:
                 filtered_judgments.append(d)
         judgments = filtered_judgments
+        judgments = await self._attach_judgment_references(judgments)
 
         if not judgments and not articles:
             return {
@@ -72,15 +91,19 @@ class RAGService:
         response = await self.embed_client.embeddings.create(
             model=EMBEDDING_MODEL,
             input=text,
-            extra_body={"task": "retrieval.query"},
+            dimensions=1024,
         )
         return response.data[0].embedding
 
-    async def _search_judgment_chunks(self, embedding: list, filters: dict, top_k: int) -> list:
+    async def _search_by_case_number(self, query: str, filters: dict) -> list:
+        query_case_numbers = [" ".join(m.split()) for m in CASE_NUMBER_QUERY_PATTERN.findall(query or "")]
+        if not query_case_numbers:
+            return []
         conn = await get_db_connection()
         try:
-            conditions = ["jc.embedding IS NOT NULL"]
-            params: list = [str(embedding), top_k]
+            conditions = []
+            params: list = [query_case_numbers]
+            conditions.append(f"j.case_number = ANY(${len(params)}::text[])")
 
             if filters.get("court"):
                 params.append(filters["court"])
@@ -91,11 +114,75 @@ class RAGService:
             if filters.get("source"):
                 params.append(filters["source"])
                 conditions.append(f"j.source = ${len(params)}")
-            if filters.get("date_from"):
-                params.append(filters["date_from"])
+            date_from = _parse_filter_date(filters.get("date_from"))
+            if date_from:
+                params.append(date_from)
                 conditions.append(f"j.date >= ${len(params)}")
-            if filters.get("date_to"):
-                params.append(filters["date_to"])
+            date_to = _parse_filter_date(filters.get("date_to"))
+            if date_to:
+                params.append(date_to)
+                conditions.append(f"j.date <= ${len(params)}")
+            if filters.get("legal_area"):
+                params.append(filters["legal_area"])
+                conditions.append(f"j.legal_area = ${len(params)}")
+            if filters.get("city"):
+                params.append(filters["city"])
+                conditions.append(f"j.city = ${len(params)}")
+
+            where_sql = "WHERE " + " AND ".join(conditions)
+
+            rows = await conn.fetch(
+                f"""
+                SELECT j.id, j.case_number, j.court, j.date, j.thesis, j.source_url,
+                       LEFT(COALESCE(j.content, ''), 1200) AS chunk_content,
+                       1.0::float AS similarity
+                FROM judgments j
+                {where_sql}
+                ORDER BY j.date DESC NULLS LAST
+                LIMIT 5
+                """,
+                *params,
+            )
+
+            results = []
+            for r in rows:
+                d = dict(r)
+                d["content"] = d.pop("chunk_content")
+                results.append(d)
+            return results
+        finally:
+            await conn.close()
+
+    async def _search_judgment_chunks(self, embedding: list, filters: dict, top_k: int) -> list:
+        conn = await get_db_connection()
+        try:
+            conditions = ["jc.embedding IS NOT NULL"]
+            params: list = [str(embedding), top_k]
+
+            if filters.get("article"):
+                params.append(f"%{filters['article']}%")
+                conditions.append(
+                    f"EXISTS (SELECT 1 FROM judgment_regulations jr JOIN unnest(jr.articles) AS a ON TRUE WHERE jr.judgment_id = j.id AND a ILIKE ${len(params)})"
+                )
+            if filters.get("act_title"):
+                params.append(f"%{filters['act_title']}%")
+                conditions.append(f"EXISTS (SELECT 1 FROM judgment_regulations jr WHERE jr.judgment_id = j.id AND jr.act_title ILIKE ${len(params)})")
+            if filters.get("court"):
+                params.append(filters["court"])
+                conditions.append(f"j.court = ${len(params)}")
+            if filters.get("court_type"):
+                params.append(filters["court_type"])
+                conditions.append(f"j.court_type = ${len(params)}")
+            if filters.get("source"):
+                params.append(filters["source"])
+                conditions.append(f"j.source = ${len(params)}")
+            date_from = _parse_filter_date(filters.get("date_from"))
+            if date_from:
+                params.append(date_from)
+                conditions.append(f"j.date >= ${len(params)}")
+            date_to = _parse_filter_date(filters.get("date_to"))
+            if date_to:
+                params.append(date_to)
                 conditions.append(f"j.date <= ${len(params)}")
             if filters.get("legal_area"):
                 params.append(filters["legal_area"])
@@ -127,6 +214,81 @@ class RAGService:
                 results.append(d)
             results.sort(key=lambda x: x["similarity"], reverse=True)
             return results
+        finally:
+            await conn.close()
+
+    async def _attach_judgment_references(self, judgments: list[dict]) -> list[dict]:
+        if not judgments:
+            return judgments
+
+        judgment_ids = list({j["id"] for j in judgments})
+        conn = await get_db_connection()
+        try:
+            out_rows = await conn.fetch(
+                """
+                SELECT jr.judgment_id,
+                       jr.referenced_case_number,
+                       jr.referenced_judgment_id,
+                       j.case_number,
+                       j.court,
+                       j.date,
+                       j.source_url
+                FROM judgment_references jr
+                LEFT JOIN judgments j ON j.id = jr.referenced_judgment_id
+                WHERE jr.judgment_id = ANY($1::int[])
+                ORDER BY jr.judgment_id, jr.id
+                """,
+                judgment_ids,
+            )
+            in_rows = await conn.fetch(
+                """
+                SELECT jr.referenced_judgment_id,
+                       jr.judgment_id,
+                       s.case_number,
+                       s.court,
+                       s.date,
+                       s.source_url
+                FROM judgment_references jr
+                JOIN judgments s ON s.id = jr.judgment_id
+                WHERE jr.referenced_judgment_id = ANY($1::int[])
+                ORDER BY jr.referenced_judgment_id, jr.id
+                """,
+                judgment_ids,
+            )
+
+            out_map: dict[int, list[dict]] = {jid: [] for jid in judgment_ids}
+            for row in out_rows:
+                d = dict(row)
+                out_map[d["judgment_id"]].append(
+                    {
+                        "referenced_case_number": d["referenced_case_number"],
+                        "referenced_judgment_id": d["referenced_judgment_id"],
+                        "case_number": d.get("case_number"),
+                        "court": d.get("court"),
+                        "date": d.get("date"),
+                        "source_url": d.get("source_url"),
+                    }
+                )
+
+            in_map: dict[int, list[dict]] = {jid: [] for jid in judgment_ids}
+            for row in in_rows:
+                d = dict(row)
+                in_map[d["referenced_judgment_id"]].append(
+                    {
+                        "judgment_id": d["judgment_id"],
+                        "case_number": d["case_number"],
+                        "court": d.get("court"),
+                        "date": d.get("date"),
+                        "source_url": d.get("source_url"),
+                    }
+                )
+
+            for judgment in judgments:
+                jid = judgment["id"]
+                judgment["references_out"] = out_map.get(jid, [])
+                judgment["references_in"] = in_map.get(jid, [])
+
+            return judgments
         finally:
             await conn.close()
 
