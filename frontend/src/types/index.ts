@@ -72,7 +72,11 @@ export interface SearchResponse {
 
 /** Matches GET /judgments response (list with pagination) */
 export interface JudgmentListParams {
+  source?: string
+  legal_area?: string
+  city?: string
   court?: string
+  court_type?: string
   date_from?: string
   date_to?: string
   limit?: number

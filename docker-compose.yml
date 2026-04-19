@@ -5,6 +5,9 @@ services:
       - "8000:8000"
     env_file:
       - ./.env
+    volumes:
+      - ./backend:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     depends_on:
       db:
         condition: service_healthy
@@ -28,12 +31,45 @@ services:
       retries: 5
     restart: always
 
+  db_users:
+    image: postgres:16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_USERS_PASSWORD}
+      POSTGRES_DB: users
+    volumes:
+      - postgres_users:/var/lib/postgresql/data
+      - ./auth/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  auth:
+    build: ./auth
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./auth/.env
+    volumes:
+      - ./auth:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+    depends_on:
+      db_users:
+        condition: service_healthy
+    restart: always
+
   frontend:
     build: ./frontend
     ports:
       - "3000:80"
     depends_on:
       - backend
+      - auth
     restart: always
 
   ingest:
@@ -41,6 +77,8 @@ services:
     command: ["python", "-m", "pipeline.scheduler"]
     env_file:
       - ./.env
+    volumes:
+      - ./backend:/app
     depends_on:
       db:
         condition: service_healthy
@@ -48,3 +86,4 @@ services:
 
 volumes:
   postgres_data:
+  postgres_users:

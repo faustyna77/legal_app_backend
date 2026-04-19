@@ -42,6 +42,7 @@ export function SearchPage() {
   const [sortMode, setSortMode] = useState<SortMode>('newest')
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [page, setPage] = useState(1)
+  const [applyFiltersToAI, setApplyFiltersToAI] = useState(false)
 
   // ── browse list (no search query) ─────────────────────────────────────────
   const [browseList, setBrowseList] = useState<JudgmentResult[]>([])
@@ -112,29 +113,34 @@ export function SearchPage() {
     if (!query.trim()) return
     setPage(1)
     setHasSearched(true)
+    const shouldApplyFilters = applyFiltersToAI
     void runSearch({
-      query, selectedSource, selectedYear,
-      selectedLegalArea, selectedCity,
-      selectedCourt, selectedCourtType,
+      query,
+      selectedSource: shouldApplyFilters ? selectedSource : '',
+      selectedYear: shouldApplyFilters ? selectedYear : '',
+      selectedLegalArea: shouldApplyFilters ? selectedLegalArea : '',
+      selectedCity: shouldApplyFilters ? selectedCity : '',
+      selectedCourt: shouldApplyFilters ? selectedCourt : '',
+      selectedCourtType: shouldApplyFilters ? selectedCourtType : '',
     })
   }
 
   const handleApplyFilters = () => {
     setPage(1)
     if (query.trim()) {
-      // semantic search + all filters
       setHasSearched(true)
       void runSearch({
-        query, selectedSource, selectedYear,
-        selectedLegalArea, selectedCity,
-        selectedCourt, selectedCourtType,
+        query,
+        selectedSource,
+        selectedYear,
+        selectedLegalArea,
+        selectedCity,
+        selectedCourt,
+        selectedCourtType,
       })
       return
     }
 
-    // browse mode (no query):
-    // GET /judgments only supports court + date range.
-    // For any other filter we must go through the search pipeline.
     const needsSearchPipeline = !!(
       selectedSource || selectedLegalArea || selectedCity || selectedCourtType
     )
@@ -143,17 +149,19 @@ export function SearchPage() {
       setHasSearched(true)
       void runSearch({
         query: 'orzeczenie sądowe',
-        selectedSource, selectedYear,
-        selectedLegalArea, selectedCity,
-        selectedCourt, selectedCourtType,
+        selectedSource,
+        selectedYear,
+        selectedLegalArea,
+        selectedCity,
+        selectedCourt,
+        selectedCourtType,
       })
     } else {
-      // only court and/or year — use browse list (fast, no LLM)
       setHasSearched(false)
       loadBrowseList({
-        year:   selectedYear,
+        year: selectedYear,
         source: '',
-        court:  selectedCourt,
+        court: selectedCourt,
       })
     }
   }
@@ -182,6 +190,11 @@ export function SearchPage() {
           onQueryChange={setQuery}
           loading={loadingSearch}
           onSubmit={handleSearch}
+          placeholder="Wpisz pytanie prawne..."
+          submitLabel="Szukaj AI"
+          showFiltersCheckbox
+          applyFiltersToAI={applyFiltersToAI}
+          onApplyFiltersToAIChange={setApplyFiltersToAI}
         />
       }
       sidebar={

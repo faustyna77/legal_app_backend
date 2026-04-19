@@ -22,6 +22,8 @@ export type SearchParams = {
   selectedCourtType: string
 }
 
+export type Filters = SearchFilters
+
 export function useJudgmentsSearch() {
   const [filters, setFilters] = useState<FiltersPayload | null>(null)
   const [loadingFilters, setLoadingFilters] = useState(false)
@@ -35,6 +37,12 @@ export function useJudgmentsSearch() {
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>([])
   const [loadingChat, setLoadingChat] = useState(false)
   const [chatError, setChatError] = useState('')
+  const [mode, setMode] = useState<'rag' | 'filter'>('filter')
+  const [ragAnswer, setRagAnswer] = useState<string | null>(null)
+  const [ragLatencyMs, setRagLatencyMs] = useState<number | undefined>()
+  const [applyFiltersToRAG, setApplyFiltersToRAG] = useState(false)
+  const [activeFilters, setActiveFilters] = useState<Filters>({})
+  const [results, setResults] = useState<JudgmentResult[]>([])
 
   useEffect(() => {
     const load = async () => {
@@ -67,16 +75,8 @@ export function useJudgmentsSearch() {
     }
   }
 
-  const runSearch = async (params: SearchParams) => {
-    if (!params.query.trim()) return
-
-    setLoadingSearch(true)
-    setSearchError('')
-    setSelectedJudgment(null)
-    setSummaryData(null)
-    setChatTurns([])
-
-    const filtersPayload: SearchFilters = {}
+  const buildFiltersFromParams = (params: SearchParams): Filters => {
+    const filtersPayload: Filters = {}
     if (params.selectedSource) filtersPayload.source = params.selectedSource
     if (params.selectedYear) {
       filtersPayload.date_from = `${params.selectedYear}-01-01`
@@ -86,22 +86,97 @@ export function useJudgmentsSearch() {
     if (params.selectedCity) filtersPayload.city = params.selectedCity
     if (params.selectedCourt) filtersPayload.court = params.selectedCourt
     if (params.selectedCourtType) filtersPayload.court_type = params.selectedCourtType
+    return filtersPayload
+  }
+
+  const searchRAG = async (query: string, filtersOverride?: Filters) => {
+    if (!query.trim()) return
+
+    const effectiveFilters = filtersOverride ?? activeFilters
+    const filtersToSend = filtersOverride ?? (applyFiltersToRAG ? effectiveFilters : {})
+
+    setLoadingSearch(true)
+    setSearchError('')
+    setMode('rag')
+    setSelectedJudgment(null)
+    setSummaryData(null)
+    setChatTurns([])
 
     try {
-      const payload = await searchApi.search(params.query.trim(), filtersPayload)
+      const payload = await searchApi.search(
+        query.trim(),
+        filtersToSend,
+      )
       setSearchResult(payload)
+      setResults(payload.judgments)
+      setRagAnswer(payload.answer ?? null)
+      setRagLatencyMs(payload.latency_ms)
       if (payload.judgments.length > 0) {
         const first = payload.judgments[0]
         setSelectedJudgment(first)
         void loadSummary(first.id)
       }
     } catch (error) {
+      setSearchResult(null)
+      setResults([])
+      setRagAnswer(null)
+      setRagLatencyMs(undefined)
       setSearchError(
         `Wyszukiwanie nie powiodło się: ${error instanceof Error ? error.message : 'nieznany błąd'}`,
       )
     } finally {
       setLoadingSearch(false)
     }
+  }
+
+  const filterJudgments = async (filtersOverride?: Filters) => {
+    const effectiveFilters = filtersOverride ?? activeFilters
+    const needsSearchPipeline = !!(
+      effectiveFilters.source ||
+      effectiveFilters.legal_area ||
+      effectiveFilters.city ||
+      effectiveFilters.court_type
+    )
+
+    setLoadingSearch(true)
+    setSearchError('')
+    setMode('filter')
+    setRagAnswer(null)
+    setRagLatencyMs(undefined)
+    setSelectedJudgment(null)
+    setSummaryData(null)
+    setChatTurns([])
+
+    try {
+      if (needsSearchPipeline) {
+        const payload = await searchApi.search('orzeczenie sądowe', effectiveFilters)
+        setSearchResult(payload)
+        setResults(payload.judgments)
+      } else {
+        const list = await judgmentsApi.list({
+          limit: 100,
+          ...(effectiveFilters.court ? { court: effectiveFilters.court } : {}),
+          ...(effectiveFilters.date_from ? { date_from: effectiveFilters.date_from } : {}),
+          ...(effectiveFilters.date_to ? { date_to: effectiveFilters.date_to } : {}),
+        })
+        setSearchResult({ judgments: list })
+        setResults(list)
+      }
+    } catch (error) {
+      setSearchResult(null)
+      setResults([])
+      setSearchError(
+        `Filtrowanie nie powiodło się: ${error instanceof Error ? error.message : 'nieznany błąd'}`,
+      )
+    } finally {
+      setLoadingSearch(false)
+    }
+  }
+
+  const runSearch = async (params: SearchParams) => {
+    const builtFilters = buildFiltersFromParams(params)
+    setActiveFilters(builtFilters)
+    await searchRAG(params.query, builtFilters)
   }
 
   const selectJudgment = (judgment: JudgmentResult) => {
@@ -137,7 +212,6 @@ export function useJudgmentsSearch() {
     }
   }
 
-  /** Normalise summary — backend may return summary as raw string or structured object */
   const summaryObject = useMemo<SummaryPayload | null>(() => {
     if (!summaryData) return null
     if (typeof summaryData.summary === 'string') {
@@ -160,6 +234,16 @@ export function useJudgmentsSearch() {
     selectedJudgment,
     selectJudgment,
     runSearch,
+    searchRAG,
+    filterJudgments,
+    mode,
+    ragAnswer,
+    ragLatencyMs,
+    applyFiltersToRAG,
+    setApplyFiltersToRAG,
+    activeFilters,
+    setActiveFilters,
+    results,
     summaryObject,
     loadingSummary,
     summaryError,

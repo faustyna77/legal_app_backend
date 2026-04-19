@@ -45,7 +45,7 @@ export function ChatPanel({
   if (!selectedJudgment) {
     return (
       <p style={{ color: 'var(--color-text-muted)', marginTop: 24, textAlign: 'center' }}>
-        Wybierz orzeczenie z listy po lewej.
+        Wybierz orzeczenie z listy po lewej.-----
       </p>
     )
   }

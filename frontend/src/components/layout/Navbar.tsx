@@ -9,7 +9,7 @@ export function Navbar() {
     <header className="topbar">
       <div className="brand-wrap">
         <div className="brand-mark" />
-        <span className="brand-text">LexSearch Taxenbach</span>
+        <span className="brand-text">LexSearch Taxenbach </span>
       </div>
 
       <nav className="topnav">
