@@ -32,7 +32,7 @@ export function SearchBar({
           {loading ? 'Szukam...' : submitLabel}
         </button>
       </form>
-      <div className="search-tools-row">
+      <div className="search-tools-row" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {showFiltersCheckbox ? (
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', userSelect: 'none' }}>
             <input
@@ -41,7 +41,7 @@ export function SearchBar({
               onChange={(e) => onApplyFiltersToAIChange?.(e.target.checked)}
               style={{ width: 16, height: 16, cursor: 'pointer' }}
             />
-            Zastosuj aktywne filtry do wyszukiwania AI
+            Zastosuj aktywne filtry do wyszukiwania inteligentnego (RAG)
           </label>
         ) : (
           <button type="button" className="mode-pill">

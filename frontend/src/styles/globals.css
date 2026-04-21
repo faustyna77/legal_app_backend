@@ -185,6 +185,7 @@ button:disabled {
   padding: 16px;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .filters-panel,
@@ -195,6 +196,13 @@ button:disabled {
   border-radius: var(--radius-lg);
   padding: 14px;
   overflow: auto;
+  min-height: 0;
+}
+
+.filters-panel {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 120px);
 }
 
 .filters-panel h3,
@@ -484,7 +492,8 @@ button:disabled {
 
 @media (max-width: 900px) {
   .topbar { flex-wrap: wrap; height: auto; gap: 8px; padding: 12px; }
-  .layout { grid-template-columns: 1fr !important; }
+  .layout { grid-template-columns: 1fr !important; overflow: visible; }
+  .filters-panel { position: static; top: auto; max-height: none; }
   .search-form,
   .chat-form { grid-template-columns: 1fr; }
 }

@@ -1,4 +1,5 @@
 import type { JudgmentResult, SortMode, ViewMode } from '../../types'
+import type { ReactNode } from 'react'
 import { JudgmentCard } from '../judgments/JudgmentCard'
 import { AnswerBox } from './AnswerBox'
 import { Spinner } from '../ui/Spinner'
@@ -20,12 +21,13 @@ interface SearchResultsProps {
   onPreviousPage: () => void
   onNextPage: () => void
   loading?: boolean
+  renderCardAction?: (judgment: JudgmentResult) => ReactNode
 }
 
 export function SearchResults({
   headerLabel, latencyMs, sortMode, onSortChange, viewMode, onViewModeChange,
   results, selectedJudgmentId, onSelectJudgment, answer, error,
-  page, totalPages, onPreviousPage, onNextPage, loading,
+  page, totalPages, onPreviousPage, onNextPage, loading, renderCardAction,
 }: SearchResultsProps) {
   return (
     <>
@@ -70,6 +72,7 @@ export function SearchResults({
             judgment={judgment}
             isSelected={selectedJudgmentId === judgment.id}
             onClick={() => onSelectJudgment(judgment)}
+            action={renderCardAction ? renderCardAction(judgment) : undefined}
           />
         ))}
       </div>

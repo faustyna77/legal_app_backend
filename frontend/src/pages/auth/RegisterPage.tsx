@@ -2,16 +2,31 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { ROUTES } from '../../config'
+import { useAuth } from '../../hooks/useAuth'
 
 export function RegisterPage() {
+  const { register } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [info, setInfo] = useState('')
+  const [name, setName] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    setInfo('Rejestracja wkrótce dostępna. Użyj konta testowego: admin@test.pl / password')
-    void email; void password
+    setError('')
+    setLoading(true)
+    try {
+      await register({
+        email,
+        password,
+        ...(name.trim() ? { name: name.trim() } : {}),
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Błąd rejestracji')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -24,9 +39,15 @@ export function RegisterPage() {
 
         <h2 style={{ margin: '0 0 20px' }}>Zarejestruj się</h2>
 
-        {info && <div className="answer-box" style={{ marginBottom: 12, fontSize: 14 }}>{info}</div>}
+        {error && <div className="error-box" style={{ marginBottom: 12 }}>{error}</div>}
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Imię i nazwisko (opcjonalnie)"
+          />
           <input
             type="email"
             value={email}
@@ -41,7 +62,9 @@ export function RegisterPage() {
             placeholder="Hasło"
             required
           />
-          <button type="submit">Zarejestruj się</button>
+          <button type="submit" disabled={loading}>
+            {loading ? 'Rejestracja...' : 'Zarejestruj się'}
+          </button>
         </form>
 
         <p style={{ marginTop: 16, textAlign: 'center', fontSize: 14, color: 'var(--color-text-muted)' }}>

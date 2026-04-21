@@ -6,6 +6,7 @@ import { JudgmentDetailPage } from './pages/judgments/DetailPage'
 import { LoginPage } from './pages/auth/LoginPage'
 import { RegisterPage } from './pages/auth/RegisterPage'
 import { AdminPage } from './pages/admin/AdminPage'
+import { FoldersPage } from './pages/folders/FoldersPage'
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
         <Route path={ROUTES.LOGIN} element={<LoginPage />} />
         <Route path={ROUTES.REGISTER} element={<RegisterPage />} />
         <Route path={ROUTES.ADMIN} element={<AdminPage />} />
+        <Route path={ROUTES.ORGANIZATION} element={<FoldersPage />} />
       </Routes>
     </BrowserRouter>
   )

@@ -6,4 +6,9 @@ export const searchApi = {
     const { data } = await apiClient.post<SearchResponse>('/search', { query, filters })
     return data
   },
+
+  async searchSemantic(query: string, filters: SearchFilters = {}): Promise<SearchResponse> {
+    const { data } = await apiClient.post<SearchResponse>('/search/semantic', { query, filters })
+    return data
+  },
 }

@@ -2,6 +2,7 @@ import { apiClient } from './client'
 import type {
   ChatResponse,
   JudgmentListParams,
+  JudgmentListResponse,
   JudgmentResult,
   SummaryResponse,
 } from '../types'
@@ -31,8 +32,26 @@ export interface JudgmentRegulationsResponse {
 
 export const judgmentsApi = {
   /** GET /judgments — paginated list */
-  async list(params: JudgmentListParams = {}): Promise<JudgmentResult[]> {
-    const { data } = await apiClient.get<JudgmentResult[]>('/judgments', { params })
+  async list(params: JudgmentListParams = {}): Promise<JudgmentListResponse> {
+    const { data } = await apiClient.get<JudgmentListResponse>('/judgments', {
+      params,
+      paramsSerializer: {
+        serialize: (raw) => {
+          const sp = new URLSearchParams()
+          Object.entries(raw).forEach(([key, value]) => {
+            if (value === undefined || value === null || value === '') return
+            if (Array.isArray(value)) {
+              value.forEach((v) => {
+                if (v !== undefined && v !== null && v !== '') sp.append(key, String(v))
+              })
+              return
+            }
+            sp.append(key, String(value))
+          })
+          return sp.toString()
+        },
+      },
+    })
     return data
   },
 

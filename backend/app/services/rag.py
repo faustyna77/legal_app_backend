@@ -34,12 +34,55 @@ def _parse_filter_date(value):
     return value
 
 
+def _normalize_filter_values(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [v for v in value if v not in (None, "")]
+    return [value]
+
+
+def _append_scalar_or_multi_filter(conditions: list[str], params: list, column_sql: str, value):
+    values = _normalize_filter_values(value)
+    if not values:
+        return
+    if len(values) == 1:
+        params.append(values[0])
+        conditions.append(f"{column_sql} = ${len(params)}")
+    else:
+        params.append(values)
+        conditions.append(f"{column_sql} = ANY(${len(params)}::text[])")
+
+
 class RAGService:
     def __init__(self):
         self.embed_client = _make_embed_client()
         self.llm_client = _make_llm_client()
 
     async def search(self, query: str, filters: dict) -> dict:
+        semantic_result = await self.semantic_search(query, filters)
+        judgments = semantic_result["judgments"]
+        articles = semantic_result["articles"]
+
+        if not judgments and not articles:
+            return {
+                "answer": "Nie znaleziono dokumentów wystarczająco powiązanych z zadanym pytaniem. Spróbuj przeformułować zapytanie lub załaduj więcej danych do bazy.",
+                "sources": [],
+                "judgments": [],
+                "articles": [],
+            }
+
+        context = self._build_context(judgments, articles)
+        answer = await self._generate(query, context)
+
+        return {
+            "answer": answer,
+            "sources": semantic_result["sources"],
+            "judgments": judgments,
+            "articles": articles,
+        }
+
+    async def semantic_search(self, query: str, filters: dict) -> dict:
         case_number_hits = await self._search_by_case_number(query, filters)
         embedding = await self._embed(query)
         judgments = await self._search_judgment_chunks(embedding, filters, top_k=10)
@@ -62,17 +105,6 @@ class RAGService:
         judgments = filtered_judgments
         judgments = await self._attach_judgment_references(judgments)
 
-        if not judgments and not articles:
-            return {
-                "answer": "Nie znaleziono dokumentów wystarczająco powiązanych z zadanym pytaniem. Spróbuj przeformułować zapytanie lub załaduj więcej danych do bazy.",
-                "sources": [],
-                "judgments": [],
-                "articles": [],
-            }
-
-        context = self._build_context(judgments, articles)
-        answer = await self._generate(query, context)
-
         seen_source_ids = set()
         unique_sources = []
         for d in judgments:
@@ -81,7 +113,6 @@ class RAGService:
                 unique_sources.append(self._doc_to_source(d, "judgment"))
 
         return {
-            "answer": answer,
             "sources": unique_sources[:3] + [self._doc_to_source(d, "article") for d in articles[:2]],
             "judgments": judgments,
             "articles": articles,
@@ -105,16 +136,12 @@ class RAGService:
             params: list = [query_case_numbers]
             conditions.append(f"j.case_number = ANY(${len(params)}::text[])")
 
-            if filters.get("court"):
-                params.append(filters["court"])
-                conditions.append(f"j.court = ${len(params)}")
-            if filters.get("court_type"):
-                params.append(filters["court_type"])
-                conditions.append(f"j.court_type = ${len(params)}")
-            if filters.get("source"):
-                params.append(filters["source"])
-                conditions.append(f"j.source = ${len(params)}")
+            _append_scalar_or_multi_filter(conditions, params, "j.court", filters.get("court"))
+            _append_scalar_or_multi_filter(conditions, params, "j.court_type", filters.get("court_type"))
+            _append_scalar_or_multi_filter(conditions, params, "j.source", filters.get("source"))
+
             date_from = _parse_filter_date(filters.get("date_from"))
+            
             if date_from:
                 params.append(date_from)
                 conditions.append(f"j.date >= ${len(params)}")
@@ -122,14 +149,11 @@ class RAGService:
             if date_to:
                 params.append(date_to)
                 conditions.append(f"j.date <= ${len(params)}")
-            if filters.get("legal_area"):
-                params.append(filters["legal_area"])
-                conditions.append(f"j.legal_area = ${len(params)}")
-            if filters.get("city"):
-                params.append(filters["city"])
-                conditions.append(f"j.city = ${len(params)}")
+            _append_scalar_or_multi_filter(conditions, params, "j.legal_area", filters.get("legal_area"))
+            _append_scalar_or_multi_filter(conditions, params, "j.city", filters.get("city"))
 
             where_sql = "WHERE " + " AND ".join(conditions)
+
 
             rows = await conn.fetch(
                 f"""
@@ -160,22 +184,28 @@ class RAGService:
             params: list = [str(embedding), top_k]
 
             if filters.get("article"):
-                params.append(f"%{filters['article']}%")
-                conditions.append(
-                    f"EXISTS (SELECT 1 FROM judgment_regulations jr JOIN unnest(jr.articles) AS a ON TRUE WHERE jr.judgment_id = j.id AND a ILIKE ${len(params)})"
-                )
+                article_values = _normalize_filter_values(filters["article"])
+                if article_values:
+                    article_conditions = []
+                    for article in article_values:
+                        params.append(f"%{article}%")
+                        article_conditions.append(
+                            f"EXISTS (SELECT 1 FROM judgment_regulations jr JOIN unnest(jr.articles) AS a ON TRUE WHERE jr.judgment_id = j.id AND a ILIKE ${len(params)})"
+                        )
+                    conditions.append("(" + " OR ".join(article_conditions) + ")")
             if filters.get("act_title"):
-                params.append(f"%{filters['act_title']}%")
-                conditions.append(f"EXISTS (SELECT 1 FROM judgment_regulations jr WHERE jr.judgment_id = j.id AND jr.act_title ILIKE ${len(params)})")
-            if filters.get("court"):
-                params.append(filters["court"])
-                conditions.append(f"j.court = ${len(params)}")
-            if filters.get("court_type"):
-                params.append(filters["court_type"])
-                conditions.append(f"j.court_type = ${len(params)}")
-            if filters.get("source"):
-                params.append(filters["source"])
-                conditions.append(f"j.source = ${len(params)}")
+                act_title_values = _normalize_filter_values(filters["act_title"])
+                if act_title_values:
+                    act_title_conditions = []
+                    for act_title in act_title_values:
+                        params.append(f"%{act_title}%")
+                        act_title_conditions.append(
+                            f"EXISTS (SELECT 1 FROM judgment_regulations jr WHERE jr.judgment_id = j.id AND jr.act_title ILIKE ${len(params)})"
+                        )
+                    conditions.append("(" + " OR ".join(act_title_conditions) + ")")
+            _append_scalar_or_multi_filter(conditions, params, "j.court", filters.get("court"))
+            _append_scalar_or_multi_filter(conditions, params, "j.court_type", filters.get("court_type"))
+            _append_scalar_or_multi_filter(conditions, params, "j.source", filters.get("source"))
             date_from = _parse_filter_date(filters.get("date_from"))
             if date_from:
                 params.append(date_from)
@@ -184,12 +214,8 @@ class RAGService:
             if date_to:
                 params.append(date_to)
                 conditions.append(f"j.date <= ${len(params)}")
-            if filters.get("legal_area"):
-                params.append(filters["legal_area"])
-                conditions.append(f"j.legal_area = ${len(params)}")
-            if filters.get("city"):
-                params.append(filters["city"])
-                conditions.append(f"j.city = ${len(params)}")
+            _append_scalar_or_multi_filter(conditions, params, "j.legal_area", filters.get("legal_area"))
+            _append_scalar_or_multi_filter(conditions, params, "j.city", filters.get("city"))
 
             where_sql = "WHERE " + " AND ".join(conditions)
 
@@ -299,14 +325,31 @@ class RAGService:
             params: list = [str(embedding), top_k]
 
             if filters.get("article_number"):
-                params.append(filters["article_number"])
-                conditions.append(f"a.article_number = ${len(params)}")
+                article_numbers = _normalize_filter_values(filters["article_number"])
+                if article_numbers:
+                    if len(article_numbers) == 1:
+                        params.append(article_numbers[0])
+                        conditions.append(f"a.article_number = ${len(params)}")
+                    else:
+                        params.append(article_numbers)
+                        conditions.append(f"a.article_number = ANY(${len(params)}::text[])")
             if filters.get("legal_act_title"):
-                params.append(f"%{filters['legal_act_title']}%")
-                conditions.append(f"la.title ILIKE ${len(params)}")
+                legal_act_titles = _normalize_filter_values(filters["legal_act_title"])
+                if legal_act_titles:
+                    title_conditions = []
+                    for legal_act_title in legal_act_titles:
+                        params.append(f"%{legal_act_title}%")
+                        title_conditions.append(f"la.title ILIKE ${len(params)}")
+                    conditions.append("(" + " OR ".join(title_conditions) + ")")
             if filters.get("act_type"):
-                params.append(filters["act_type"])
-                conditions.append(f"la.type = ${len(params)}")
+                act_types = _normalize_filter_values(filters["act_type"])
+                if act_types:
+                    if len(act_types) == 1:
+                        params.append(act_types[0])
+                        conditions.append(f"la.type = ${len(params)}")
+                    else:
+                        params.append(act_types)
+                        conditions.append(f"la.type = ANY(${len(params)}::text[])")
 
             where_sql = "WHERE " + " AND ".join(conditions)
 

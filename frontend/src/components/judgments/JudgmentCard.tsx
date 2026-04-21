@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { JudgmentResult } from '../../types'
 import { formatDate, formatSimilarity, truncate } from '../../utils'
 import { Badge } from '../ui/Badge'
@@ -6,9 +7,10 @@ interface JudgmentCardProps {
   judgment: JudgmentResult
   isSelected: boolean
   onClick: () => void
+  action?: ReactNode
 }
 
-export function JudgmentCard({ judgment, isSelected, onClick }: JudgmentCardProps) {
+export function JudgmentCard({ judgment, isSelected, onClick, action }: JudgmentCardProps) {
   return (
     <article
       className={`result-card${isSelected ? ' active' : ''}`}
@@ -31,6 +33,7 @@ export function JudgmentCard({ judgment, isSelected, onClick }: JudgmentCardProp
           <Badge>trafność {formatSimilarity(judgment.similarity)}</Badge>
         )}
       </div>
+      {action}
     </article>
   )
 }

@@ -23,3 +23,15 @@ async def search(
     result = await rag.search(body.query, body.filters)
     result["latency_ms"] = int((time.time() - start) * 1000)
     return result
+
+
+@router.post("/search/semantic")
+async def semantic_search(
+    body: SearchRequest,
+    _: None = Depends(verify_internal_key),
+):
+    start = time.time()
+    rag = RAGService()
+    result = await rag.semantic_search(body.query, body.filters)
+    result["latency_ms"] = int((time.time() - start) * 1000)
+    return result

@@ -1,15 +1,34 @@
 from typing import Optional
 from fastapi import APIRouter, Query, HTTPException
+from datetime import date as DateType
 from app.db import get_db_connection
+
+
+def _normalize_multi(value: Optional[list[str]]) -> list[str]:
+    if not value:
+        return []
+    out: list[str] = []
+    for item in value:
+        if not item:
+            continue
+        parts = [p.strip() for p in item.split(",") if p.strip()]
+        out.extend(parts)
+    return out
+
 
 router = APIRouter()
 
-
 @router.get("")
 async def list_judgments(
-    court: Optional[str] = Query(None),
+    court: Optional[list[str]] = Query(None),
+    court_type: Optional[list[str]] = Query(None),
+    legal_area: Optional[list[str]] = Query(None),
+    source: Optional[list[str]] = Query(None),
+    city: Optional[list[str]] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    article: Optional[list[str]] = Query(None),
+    act_title: Optional[list[str]] = Query(None),
     limit: int = Query(20, le=100),
     offset: int = Query(0),
 ):
@@ -18,30 +37,86 @@ async def list_judgments(
         conditions = []
         params = []
 
-        if court:
-            params.append(court)
-            conditions.append(f"court = ${len(params)}")
+        courts = _normalize_multi(court)
+        if courts:
+            params.append(courts)
+            conditions.append(f"j.court = ANY(${len(params)}::text[])")
+
+        court_types = _normalize_multi(court_type)
+        if court_types:
+            params.append(court_types)
+            conditions.append(f"j.court_type = ANY(${len(params)}::text[])")
+
+        legal_areas = _normalize_multi(legal_area)
+        if legal_areas:
+            params.append(legal_areas)
+            conditions.append(f"j.legal_area = ANY(${len(params)}::text[])")
+
+        sources = _normalize_multi(source)
+        if sources:
+            params.append(sources)
+            conditions.append(f"j.source = ANY(${len(params)}::text[])")
+
+        cities = _normalize_multi(city)
+        if cities:
+            params.append(cities)
+            conditions.append(f"j.city = ANY(${len(params)}::text[])")
         if date_from:
-            params.append(date_from)
-            conditions.append(f"date >= ${len(params)}")
+            params.append(DateType.fromisoformat(date_from))  # ← konwersja
+            conditions.append(f"j.date >= ${len(params)}")
         if date_to:
-            params.append(date_to)
-            conditions.append(f"date <= ${len(params)}")
+            params.append(DateType.fromisoformat(date_to))    # ← konwersja
+            conditions.append(f"j.date <= ${len(params)}")
+        articles = _normalize_multi(article)
+        if articles:
+            article_conditions = []
+            for single_article in articles:
+                params.append(f"%{single_article}%")
+                article_conditions.append(
+                    f"EXISTS (SELECT 1 FROM judgment_regulations jr "
+                    f"JOIN unnest(jr.articles) AS a ON TRUE "
+                    f"WHERE jr.judgment_id = j.id AND a ILIKE ${len(params)})"
+                )
+            conditions.append("(" + " OR ".join(article_conditions) + ")")
+
+        act_titles = _normalize_multi(act_title)
+        if act_titles:
+            act_title_conditions = []
+            for single_act_title in act_titles:
+                params.append(f"%{single_act_title}%")
+                act_title_conditions.append(
+                    f"EXISTS (SELECT 1 FROM judgment_regulations jr "
+                    f"WHERE jr.judgment_id = j.id AND jr.act_title ILIKE ${len(params)})"
+                )
+            conditions.append("(" + " OR ".join(act_title_conditions) + ")")
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        params += [limit, offset]
 
+        count_row = await conn.fetchrow(
+            f"SELECT COUNT(*) as total FROM judgments j {where}",
+            *params
+        )
+        total = count_row["total"]
+
+        params += [limit, offset]
         rows = await conn.fetch(
             f"""
-            SELECT id, case_number, court, date, thesis, source_url, created_at
-            FROM judgments
+            SELECT j.id, j.case_number, j.court, j.court_type, j.city,
+                   j.date, j.thesis, j.source_url, j.legal_area, j.source,
+                   j.created_at
+            FROM judgments j
             {where}
-            ORDER BY date DESC
+            ORDER BY j.date DESC NULLS LAST
             LIMIT ${len(params) - 1} OFFSET ${len(params)}
             """,
             *params,
         )
-        return [dict(r) for r in rows]
+        return {
+            "judgments": [dict(r) for r in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
     finally:
         await conn.close()
 

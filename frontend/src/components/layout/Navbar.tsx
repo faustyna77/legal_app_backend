@@ -1,9 +1,11 @@
 import { NavLink } from 'react-router-dom'
 import { ROUTES } from '../../config'
 import { useAuthStore } from '../../contexts/authStore'
+import { useAuth } from '../../hooks/useAuth'
 
 export function Navbar() {
-  const { isAuthenticated, clearAuth } = useAuthStore()
+  const { isAuthenticated } = useAuthStore()
+  const { logout } = useAuth()
 
   return (
     <header className="topbar">
@@ -15,19 +17,16 @@ export function Navbar() {
       <nav className="topnav">
         <NavLink to={ROUTES.SEARCH}>Orzecznictwo</NavLink>
         <NavLink to={ROUTES.JUDGMENTS}>Asystent AI</NavLink>
-        <NavLink to={ROUTES.ADMIN}>Raporty</NavLink>
+        <NavLink to={ROUTES.ORGANIZATION}>Organizacja</NavLink>
       </nav>
 
       <div className="topbar-actions">
         {isAuthenticated ? (
-          <button className="ghost-btn" type="button" onClick={clearAuth}>
+          <button className="ghost-btn" type="button" onClick={() => void logout()}>
             Wyloguj
           </button>
         ) : (
-          <>
-            <button className="ghost-btn" type="button">Organizacja</button>
-            <NavLink to={ROUTES.LOGIN} className="dark-btn">Konto</NavLink>
-          </>
+          <NavLink to={ROUTES.LOGIN} className="dark-btn">Konto</NavLink>
         )}
       </div>
     </header>

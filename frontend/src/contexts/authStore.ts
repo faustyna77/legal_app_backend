@@ -5,8 +5,11 @@ import type { User } from '../types'
 interface AuthState {
   user: User | null
   token: string | null
+  refreshToken: string | null
   isAuthenticated: boolean
-  setAuth: (user: User, token: string) => void
+  setAuth: (user: User, token: string, refreshToken: string) => void
+  setUser: (user: User) => void
+  setToken: (token: string) => void
   clearAuth: () => void
 }
 
@@ -15,16 +18,28 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       user: null,
       token: null,
+      refreshToken: null,
       isAuthenticated: false,
 
-      setAuth: (user, token) => {
+      setAuth: (user, token, refreshToken) => {
         localStorage.setItem('access_token', token)
-        set({ user, token, isAuthenticated: true })
+        localStorage.setItem('refresh_token', refreshToken)
+        set({ user, token, refreshToken, isAuthenticated: true })
+      },
+
+      setUser: (user) => {
+        set({ user })
+      },
+
+      setToken: (token) => {
+        localStorage.setItem('access_token', token)
+        set((state) => ({ token, isAuthenticated: Boolean(state.user) }))
       },
 
       clearAuth: () => {
         localStorage.removeItem('access_token')
-        set({ user: null, token: null, isAuthenticated: false })
+        localStorage.removeItem('refresh_token')
+        set({ user: null, token: null, refreshToken: null, isAuthenticated: false })
       },
     }),
     {
@@ -32,6 +47,7 @@ export const useAuthStore = create<AuthState>()(
       partialize: (state) => ({
         user: state.user,
         token: state.token,
+        refreshToken: state.refreshToken,
         isAuthenticated: state.isAuthenticated,
       }),
     },

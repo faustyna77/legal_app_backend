@@ -1,29 +1,50 @@
 import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authApi } from '../api'
-import type { LoginPayload } from '../api'
+import type { LoginPayload, RegisterPayload } from '../api'
 import { useAuthStore } from '../contexts/authStore'
 import { ROUTES } from '../config'
 
 export function useAuth() {
-  const { user, token, isAuthenticated, setAuth, clearAuth } = useAuthStore()
+  const { user, token, isAuthenticated, refreshToken, setAuth, clearAuth } = useAuthStore()
   const navigate = useNavigate()
 
   const login = useCallback(
     async (payload: LoginPayload) => {
       const tokens = await authApi.login(payload)
-      // TODO: replace mock user with real /auth/me call after login
-      const mockUser = { id: 1, email: payload.email, role: 'user' as const }
-      setAuth(mockUser, tokens.access_token)
+      localStorage.setItem('access_token', tokens.access_token)
+      localStorage.setItem('refresh_token', tokens.refresh_token)
+      const me = await authApi.me()
+      setAuth(me, tokens.access_token, tokens.refresh_token)
       navigate(ROUTES.SEARCH)
     },
     [setAuth, navigate],
   )
 
-  const logout = useCallback(() => {
+  const register = useCallback(
+    async (payload: RegisterPayload) => {
+      const tokens = await authApi.register(payload)
+      localStorage.setItem('access_token', tokens.access_token)
+      localStorage.setItem('refresh_token', tokens.refresh_token)
+      const me = await authApi.me()
+      setAuth(me, tokens.access_token, tokens.refresh_token)
+      navigate(ROUTES.SEARCH)
+    },
+    [setAuth, navigate],
+  )
+
+  const logout = useCallback(async () => {
+    const storedRefresh = refreshToken ?? localStorage.getItem('refresh_token')
+    if (storedRefresh) {
+      try {
+        await authApi.logout({ refresh_token: storedRefresh })
+      } catch (e) {
+        void e
+      }
+    }
     clearAuth()
     navigate(ROUTES.LOGIN)
-  }, [clearAuth, navigate])
+  }, [refreshToken, clearAuth, navigate])
 
-  return { user, token, isAuthenticated, login, logout }
+  return { user, token, isAuthenticated, login, register, logout }
 }

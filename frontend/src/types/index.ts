@@ -21,13 +21,15 @@ export interface FiltersPayload {
 
 /** Params sent to POST /search → filters field */
 export interface SearchFilters {
-  source?: string
+  source?: string | string[]
   date_from?: string
   date_to?: string
-  court?: string
-  court_type?: string
-  legal_area?: string
-  city?: string
+  court?: string | string[]
+  court_type?: string | string[]
+  legal_area?: string | string[]
+  city?: string | string[]
+  article?: string | string[]
+  act_title?: string | string[]
 }
 
 // ── Judgment references (attached by rag.py _attach_judgment_references) ────
@@ -66,21 +68,31 @@ export interface JudgmentResult {
 
 export interface SearchResponse {
   judgments: JudgmentResult[]
+  total?: number
   latency_ms?: number
   answer?: string
 }
 
-/** Matches GET /judgments response (list with pagination) */
+/** Params for GET /judgments */
 export interface JudgmentListParams {
-  source?: string
-  legal_area?: string
-  city?: string
-  court?: string
-  court_type?: string
+  source?: string | string[]
+  legal_area?: string | string[]
+  city?: string | string[]
+  court?: string | string[]
+  court_type?: string | string[]
   date_from?: string
   date_to?: string
+  article?: string | string[]
+  act_title?: string | string[]
   limit?: number
   offset?: number
+}
+
+export interface JudgmentListResponse {
+  judgments: JudgmentResult[]
+  total: number
+  limit: number
+  offset: number
 }
 
 // ── Summary ──────────────────────────────────────────────────────────────────
@@ -124,10 +136,78 @@ export interface ChatTurn {
 export interface User {
   id: number
   email: string
-  role: 'admin' | 'user'
+  name?: string | null
+  is_active?: boolean
+  created_at?: string
 }
 
 export interface AuthTokens {
   access_token: string
+  refresh_token: string
   token_type: string
+}
+
+export interface Folder {
+  id: number
+  name: string
+  description: string | null
+  created_at: string
+  judgment_count?: number
+}
+
+export interface FolderListResponse {
+  folders: Folder[]
+}
+
+export interface FolderCreatePayload {
+  name: string
+  description?: string
+}
+
+export interface FolderJudgmentPayload {
+  judgment_id: number
+  case_number: string
+  court?: string | null
+  date?: string | null
+  note?: string
+}
+
+export interface FolderJudgmentItem {
+  judgment_id: number
+  case_number: string
+  court: string | null
+  date: string | null
+  note: string | null
+  created_at: string
+}
+
+export interface FolderJudgmentListResponse {
+  judgments: FolderJudgmentItem[]
+}
+
+export interface SearchHistoryItem {
+  id: number
+  query: string
+  filters: Record<string, unknown> | null
+  answer: string | null
+  case_numbers: string[]
+  created_at: string
+}
+
+export interface SearchHistoryResponse {
+  history: SearchHistoryItem[]
+}
+
+export interface ChatHistoryItem {
+  id: number
+  judgment_id: number
+  case_number: string
+  court: string | null
+  question: string
+  answer: string
+  created_at: string
+}
+
+export interface ChatHistoryResponse {
+  history: ChatHistoryItem[]
 }

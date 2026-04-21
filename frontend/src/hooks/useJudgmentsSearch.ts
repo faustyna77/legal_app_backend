@@ -14,12 +14,16 @@ import type {
 
 export type SearchParams = {
   query: string
-  selectedSource: string
+  selectedSource: string[]
   selectedYear: string
-  selectedLegalArea: string
-  selectedCity: string
-  selectedCourt: string
-  selectedCourtType: string
+  selectedLegalArea: string[]
+  selectedCity: string[]
+  selectedCourt: string[]
+  selectedCourtType: string[]
+  selectedDateFrom?: string
+  selectedDateTo?: string
+  selectedArticle?: string
+  selectedActTitle?: string
 }
 
 export type Filters = SearchFilters
@@ -43,6 +47,7 @@ export function useJudgmentsSearch() {
   const [applyFiltersToRAG, setApplyFiltersToRAG] = useState(false)
   const [activeFilters, setActiveFilters] = useState<Filters>({})
   const [results, setResults] = useState<JudgmentResult[]>([])
+  const [resultsTotal, setResultsTotal] = useState<number | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -77,15 +82,19 @@ export function useJudgmentsSearch() {
 
   const buildFiltersFromParams = (params: SearchParams): Filters => {
     const filtersPayload: Filters = {}
-    if (params.selectedSource) filtersPayload.source = params.selectedSource
-    if (params.selectedYear) {
+    if (params.selectedSource.length) filtersPayload.source = params.selectedSource
+    if (params.selectedDateFrom) filtersPayload.date_from = params.selectedDateFrom
+    if (params.selectedDateTo) filtersPayload.date_to = params.selectedDateTo
+    if (!params.selectedDateFrom && !params.selectedDateTo && params.selectedYear) {
       filtersPayload.date_from = `${params.selectedYear}-01-01`
       filtersPayload.date_to = `${params.selectedYear}-12-31`
     }
-    if (params.selectedLegalArea) filtersPayload.legal_area = params.selectedLegalArea
-    if (params.selectedCity) filtersPayload.city = params.selectedCity
-    if (params.selectedCourt) filtersPayload.court = params.selectedCourt
-    if (params.selectedCourtType) filtersPayload.court_type = params.selectedCourtType
+    if (params.selectedLegalArea.length) filtersPayload.legal_area = params.selectedLegalArea
+    if (params.selectedCity.length) filtersPayload.city = params.selectedCity
+    if (params.selectedCourt.length) filtersPayload.court = params.selectedCourt
+    if (params.selectedCourtType.length) filtersPayload.court_type = params.selectedCourtType
+    if (params.selectedArticle) filtersPayload.article = params.selectedArticle
+    if (params.selectedActTitle) filtersPayload.act_title = params.selectedActTitle
     return filtersPayload
   }
 
@@ -109,6 +118,7 @@ export function useJudgmentsSearch() {
       )
       setSearchResult(payload)
       setResults(payload.judgments)
+      setResultsTotal(typeof payload.total === 'number' ? payload.total : payload.judgments.length)
       setRagAnswer(payload.answer ?? null)
       setRagLatencyMs(payload.latency_ms)
       if (payload.judgments.length > 0) {
@@ -119,10 +129,11 @@ export function useJudgmentsSearch() {
     } catch (error) {
       setSearchResult(null)
       setResults([])
+      setResultsTotal(0)
       setRagAnswer(null)
       setRagLatencyMs(undefined)
       setSearchError(
-        `Wyszukiwanie nie powiodło się: ${error instanceof Error ? error.message : 'nieznany błąd'}`,
+        `Wyszukiwanie inteligentne nie powiodło się: ${error instanceof Error ? error.message : 'nieznany błąd'}`,
       )
     } finally {
       setLoadingSearch(false)
@@ -131,12 +142,6 @@ export function useJudgmentsSearch() {
 
   const filterJudgments = async (filtersOverride?: Filters) => {
     const effectiveFilters = filtersOverride ?? activeFilters
-    const needsSearchPipeline = !!(
-      effectiveFilters.source ||
-      effectiveFilters.legal_area ||
-      effectiveFilters.city ||
-      effectiveFilters.court_type
-    )
 
     setLoadingSearch(true)
     setSearchError('')
@@ -148,23 +153,25 @@ export function useJudgmentsSearch() {
     setChatTurns([])
 
     try {
-      if (needsSearchPipeline) {
-        const payload = await searchApi.search('orzeczenie sądowe', effectiveFilters)
-        setSearchResult(payload)
-        setResults(payload.judgments)
-      } else {
-        const list = await judgmentsApi.list({
-          limit: 100,
-          ...(effectiveFilters.court ? { court: effectiveFilters.court } : {}),
-          ...(effectiveFilters.date_from ? { date_from: effectiveFilters.date_from } : {}),
-          ...(effectiveFilters.date_to ? { date_to: effectiveFilters.date_to } : {}),
-        })
-        setSearchResult({ judgments: list })
-        setResults(list)
-      }
+      const payload = await judgmentsApi.list({
+        limit: 100,
+        ...(effectiveFilters.source ? { source: effectiveFilters.source } : {}),
+        ...(effectiveFilters.legal_area ? { legal_area: effectiveFilters.legal_area } : {}),
+        ...(effectiveFilters.city ? { city: effectiveFilters.city } : {}),
+        ...(effectiveFilters.court ? { court: effectiveFilters.court } : {}),
+        ...(effectiveFilters.court_type ? { court_type: effectiveFilters.court_type } : {}),
+        ...(effectiveFilters.date_from ? { date_from: effectiveFilters.date_from } : {}),
+        ...(effectiveFilters.date_to ? { date_to: effectiveFilters.date_to } : {}),
+        ...(effectiveFilters.article ? { article: effectiveFilters.article } : {}),
+        ...(effectiveFilters.act_title ? { act_title: effectiveFilters.act_title } : {}),
+      })
+      setSearchResult({ judgments: payload.judgments, total: payload.total })
+      setResults(payload.judgments)
+      setResultsTotal(payload.total)
     } catch (error) {
       setSearchResult(null)
       setResults([])
+      setResultsTotal(0)
       setSearchError(
         `Filtrowanie nie powiodło się: ${error instanceof Error ? error.message : 'nieznany błąd'}`,
       )
@@ -244,6 +251,7 @@ export function useJudgmentsSearch() {
     activeFilters,
     setActiveFilters,
     results,
+    resultsTotal,
     summaryObject,
     loadingSummary,
     summaryError,

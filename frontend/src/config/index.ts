@@ -2,6 +2,9 @@
 export const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000'
 
+export const AUTH_API_BASE_URL =
+  (import.meta.env.VITE_AUTH_API_BASE_URL as string | undefined) ?? 'http://localhost:8001'
+
 export const INTERNAL_API_KEY =
   (import.meta.env.VITE_INTERNAL_API_KEY as string | undefined) ?? ''
 
@@ -14,6 +17,9 @@ export const ROUTES = {
   LOGIN: '/login',
   REGISTER: '/register',
   ADMIN: '/admin',
+  ORGANIZATION: '/folders',
+  FOLDER_DETAIL: '/folders/:id',
+  HISTORY: '/history',
 } as const
 
 // ── React Query cache keys ────────────────────────────────────────────────────
