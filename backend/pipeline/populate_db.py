@@ -181,7 +181,7 @@ def backfill_summaries(limit: int = 100) -> int:
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
-CASE_NUMBER_PATTERN = r"\b[IVX]+\s+[A-Za-z]+\s+\d+[a-z]?/\d{2,4}\b"
+CASE_NUMBER_PATTERN = r"\b[IVX]+\s+[A-Za-z]+(?:/[A-Za-z]+)?\s+\d+[a-z]?/\d{2,4}\b"
 ARTICLE_MENTION_PATTERN = re.compile(
     r"\bart\.\s*\d+[a-z]?(?:\s*§\s*\d+[a-z]?)?(?:\s*ust\.\s*\d+[a-z]?)?(?:\s*pkt\s*\d+[a-z]?)?",
     re.IGNORECASE,
@@ -754,9 +754,14 @@ def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
                         """UPDATE judgments SET content = %s, embedding = NULL, summary = NULL,
                            content_updated_at = NOW(),
                            judgment_type = COALESCE(judgment_type, %s),
-                           is_final = COALESCE(is_final, %s)
+                           is_final = COALESCE(is_final, %s),
+                           keywords = CASE WHEN keywords IS NULL OR array_length(keywords, 1) IS NULL THEN %s ELSE keywords END
                            WHERE id = %s""",
-                        (new_content, j.get("judgment_type"), j.get("is_final"), judgment_id),
+                        (
+                            new_content, j.get("judgment_type"), j.get("is_final"),
+                            j.get("keywords") or [],
+                            judgment_id,
+                        ),
                     )
                     cur.execute("DELETE FROM judgment_chunks WHERE judgment_id = %s", (judgment_id,))
                     store_judgment_chunks(cur, judgment_id, new_content)
@@ -767,9 +772,14 @@ def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
                     cur.execute(
                         """UPDATE judgments
                            SET judgment_type = COALESCE(judgment_type, %s),
-                               is_final = COALESCE(is_final, %s)
+                               is_final = COALESCE(is_final, %s),
+                               keywords = CASE WHEN keywords IS NULL OR array_length(keywords, 1) IS NULL THEN %s ELSE keywords END
                            WHERE id = %s""",
-                        (j.get("judgment_type"), j.get("is_final"), judgment_id),
+                        (
+                            j.get("judgment_type"), j.get("is_final"),
+                            j.get("keywords") or [],
+                            judgment_id,
+                        ),
                     )
                     cur.execute("SELECT 1 FROM judgment_chunks WHERE judgment_id = %s LIMIT 1", (judgment_id,))
                     if not cur.fetchone() and new_content:
@@ -777,6 +787,18 @@ def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
 
                 if j.get("content"):
                     store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                for related_cn in (j.get("related_case_numbers") or []):
+                    if related_cn == j["case_number"]:
+                        continue
+                    cur.execute("SELECT id FROM judgments WHERE case_number = %s", (related_cn,))
+                    ref_row = cur.fetchone()
+                    cur.execute(
+                        """INSERT INTO judgment_references (judgment_id, referenced_case_number, referenced_judgment_id)
+                           VALUES (%s, %s, %s)
+                           ON CONFLICT (judgment_id, referenced_case_number) DO UPDATE
+                           SET referenced_judgment_id = COALESCE(judgment_references.referenced_judgment_id, EXCLUDED.referenced_judgment_id)""",
+                        (judgment_id, related_cn, ref_row[0] if ref_row else None),
+                    )
                 if j.get("regulations"):
                     regulations = enrich_regulations_articles(cur, j.get("regulations", []), j.get("content"))
                     store_judgment_regulations(cur, judgment_id, regulations)
@@ -791,6 +813,18 @@ def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
                     store_judgment_chunks(cur, judgment_id, j["content"])
                     if j.get("content"):
                         store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                    for related_cn in (j.get("related_case_numbers") or []):
+                        if related_cn == j["case_number"]:
+                            continue
+                        cur.execute("SELECT id FROM judgments WHERE case_number = %s", (related_cn,))
+                        ref_row = cur.fetchone()
+                        cur.execute(
+                            """INSERT INTO judgment_references (judgment_id, referenced_case_number, referenced_judgment_id)
+                               VALUES (%s, %s, %s)
+                               ON CONFLICT (judgment_id, referenced_case_number) DO UPDATE
+                               SET referenced_judgment_id = COALESCE(judgment_references.referenced_judgment_id, EXCLUDED.referenced_judgment_id)""",
+                            (judgment_id, related_cn, ref_row[0] if ref_row else None),
+                        )
                     if j.get("regulations"):
                         regulations = enrich_regulations_articles(cur, j.get("regulations", []), j.get("content"))
                         store_judgment_regulations(cur, judgment_id, regulations)

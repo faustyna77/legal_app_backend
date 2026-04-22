@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from app.routers import search, judgments, embed, filters, summaries, chat
+from app.routers import search, judgments, embed, filters, summaries, chat, folder_chat
 
 app = FastAPI(
     title="Legal RAG API",
@@ -22,6 +22,7 @@ app.include_router(search.router, tags=["search"])
 app.include_router(summaries.router, prefix="/judgments", tags=["summary"])
 app.include_router(judgments.router, prefix="/judgments", tags=["judgments"])
 app.include_router(chat.router, prefix="/judgments", tags=["chat"])
+app.include_router(folder_chat.router, tags=["folder-chat"])
 app.include_router(embed.router, prefix="/embed", tags=["embed"])
 app.include_router(filters.router, tags=["filters"])
 

@@ -95,7 +95,7 @@ def run_saos_job() -> None:
     )
     backfill_references(limit=500)
     backfill_saos_regulation_articles(limit=500)
-    # SAOS nie zwraca is_final przez API — uzupełniamy przez LLM
+    # is_final dla SAOS inferred z court_type/nazwy sądu + tekstu; LLM uzupełnia pozostałe NULL-e
     if metadata_limit > 0:
         backfill_judgment_metadata(limit=metadata_limit)
     embedded_judgments, embedded_chunks = _embed_full_for_next_judgments(embed_judgment_limit, embed_batch_size)

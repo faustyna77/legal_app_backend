@@ -13,7 +13,7 @@ async def verify_internal_key(x_internal_key: str = Depends(api_key_scheme)):
     if x_internal_key != os.getenv("INTERNAL_API_KEY"):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-# nowa — opcjonalna weryfikacja JWT dla zalogowanych użytkowników
+# nowa 
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 

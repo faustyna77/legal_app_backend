@@ -231,3 +231,23 @@ export interface ChatHistoryItem {
 export interface ChatHistoryResponse {
   history: ChatHistoryItem[]
 }
+
+export interface FolderChatResponse {
+  answer: string
+  question: string
+  chunks_used: number
+  judgment_ids: number[]
+}
+
+export interface FolderChatHistoryItem {
+  id: number
+  folder_id: number
+  folder_name: string | null
+  question: string
+  answer: string
+  created_at: string
+}
+
+export interface FolderChatHistoryResponse {
+  history: FolderChatHistoryItem[]
+}

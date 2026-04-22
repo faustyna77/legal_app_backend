@@ -57,18 +57,27 @@ async def _generate_summary(judgment: dict) -> dict:
     )
 
     raw = response.choices[0].message.content.strip()
+    raw_clean = raw.replace("```json", "").replace("```", "").strip()
     try:
-        raw_clean = raw.replace("```json", "").replace("```", "").strip()
         return json.loads(raw_clean)
     except Exception:
-        return {
-            "teza": raw,
-            "stan_faktyczny": "",
-            "rozstrzygniecie": "",
-            "podstawa_prawna": "",
-            "typ_orzeczenia": "",
-            "prawomocnosc": "",
-        }
+        pass
+    # Try to extract first JSON object via regex (handles truncated responses)
+    import re as _re
+    m = _re.search(r'\{.*\}', raw_clean, _re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    return {
+        "teza": raw_clean,
+        "stan_faktyczny": "",
+        "rozstrzygniecie": "",
+        "podstawa_prawna": "",
+        "typ_orzeczenia": "",
+        "prawomocnosc": "",
+    }
 
 
 @router.get("/{judgment_id}/summary")

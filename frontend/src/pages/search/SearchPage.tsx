@@ -43,6 +43,7 @@ export function SearchPage() {
   const [hasSearched, setHasSearched] = useState(false)
   const [folders, setFolders] = useState<Folder[]>([])
   const [foldersLoading, setFoldersLoading] = useState(false)
+  const [addToFolderMsg, setAddToFolderMsg] = useState('')
 
   const loadBrowseList = (opts: {
     year?: string
@@ -153,6 +154,7 @@ export function SearchPage() {
     setHasSearched(true)
 
     const shouldApplyFilters = applyFiltersToAI
+    setSortMode('relevance')
     void runSearch({
       query,
       selectedSource: shouldApplyFilters ? selectedSource : [],
@@ -165,6 +167,8 @@ export function SearchPage() {
       selectedDateTo: shouldApplyFilters ? selectedDateTo : '',
       selectedArticle: shouldApplyFilters ? selectedArticle : '',
       selectedActTitle: shouldApplyFilters ? selectedActTitle : '',
+      selectedJudgmentType: shouldApplyFilters ? selectedJudgmentType : [],
+      selectedIsFinal: shouldApplyFilters ? selectedIsFinal : '',
     })
   }
 
@@ -227,12 +231,23 @@ export function SearchPage() {
 
   const addToFolder = (folderId: number, judgment: JudgmentResult) => {
     if (!isAuthenticated) return
-    void foldersApi.addJudgment(folderId, {
-      judgment_id: judgment.id,
-      case_number: judgment.case_number,
-      court: judgment.court ?? null,
-      date: judgment.date ?? null,
-    })
+    foldersApi
+      .addJudgment(folderId, {
+        judgment_id: judgment.id,
+        case_number: judgment.case_number,
+        court: judgment.court ?? null,
+        date: judgment.date ?? null,
+      })
+      .then(() => {
+        const folder = folders.find((f) => f.id === folderId)
+        setAddToFolderMsg(`Dodano do katalogu "${folder?.name ?? ''}"`)
+        window.setTimeout(() => setAddToFolderMsg(''), 3000)
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : 'Błąd dodawania do katalogu'
+        setAddToFolderMsg(msg)
+        window.setTimeout(() => setAddToFolderMsg(''), 4000)
+      })
   }
 
   const uiTotalCount = hasSearched
@@ -244,6 +259,18 @@ export function SearchPage() {
     : `Ostatnie orzeczenia (${uiTotalCount})`
 
   return (
+    <>
+      {addToFolderMsg && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 1000,
+          background: addToFolderMsg.startsWith('Dodano') ? 'var(--color-primary)' : '#c0392b',
+          color: '#fff', borderRadius: 'var(--radius-md)',
+          padding: '10px 18px', fontWeight: 600, fontSize: 14,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+        }}>
+          {addToFolderMsg}
+        </div>
+      )}
     <Layout
       toolbar={
         <SearchBar
@@ -333,5 +360,6 @@ export function SearchPage() {
         />
       }
     />
+    </>
   )
 }

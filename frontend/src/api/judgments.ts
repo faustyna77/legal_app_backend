@@ -12,6 +12,7 @@ export interface JudgmentReferencesResponse {
   judgment_id: number
   references_out: {
     case_number: string
+    judgment_id?: number
     court: string | null
     date: string | null
     source_url: string | null

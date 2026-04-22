@@ -19,6 +19,7 @@ export const ROUTES = {
   ADMIN: '/admin',
   ORGANIZATION: '/folders',
   FOLDER_DETAIL: '/folders/:id',
+  FOLDER_CHAT: '/folders/:id/chat',
   HISTORY: '/history',
 } as const
 

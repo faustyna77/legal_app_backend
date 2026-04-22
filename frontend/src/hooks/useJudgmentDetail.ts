@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { judgmentsApi } from '../api/judgments'
+import type { JudgmentReferencesResponse, JudgmentRegulationsResponse } from '../api/judgments'
 import type { ChatTurn, JudgmentResult, SummaryPayload, SummaryResponse } from '../types'
 
 export function useJudgmentDetail(id: number) {
@@ -12,6 +13,9 @@ export function useJudgmentDetail(id: number) {
   const [summaryError, setSummaryError] = useState('')
 
   const [similar, setSimilar] = useState<JudgmentResult[]>([])
+
+  const [references, setReferences] = useState<JudgmentReferencesResponse | null>(null)
+  const [regulations, setRegulations] = useState<JudgmentRegulationsResponse | null>(null)
 
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>([])
   const [loadingChat, setLoadingChat] = useState(false)
@@ -32,8 +36,10 @@ export function useJudgmentDetail(id: number) {
         if (cancelled) return
         setJudgment(j)
 
-        // load similar judgments (fire-and-forget, no blocking)
+        // load similar, references, regulations (fire-and-forget)
         judgmentsApi.getSimilar(id, 5).then(setSimilar).catch(() => {})
+        judgmentsApi.getReferences(id).then(setReferences).catch(() => {})
+        judgmentsApi.getRegulations(id).then(setRegulations).catch(() => {})
 
         // auto-load summary
         setLoadingSummary(true)
@@ -89,10 +95,30 @@ export function useJudgmentDetail(id: number) {
 
   const summaryObject = useMemo<SummaryPayload | null>(() => {
     if (!summaryData) return null
-    if (typeof summaryData.summary === 'string') {
-      return { teza: summaryData.summary, stan_faktyczny: '', rozstrzygniecie: '', podstawa_prawna: '' }
+
+    let s = summaryData.summary
+
+    // If summary came back as a raw string, try to parse it as JSON
+    if (typeof s === 'string') {
+      const cleaned = s.replace(/```json/g, '').replace(/```/g, '').trim()
+      try { s = JSON.parse(cleaned) } catch { /* keep as string */ }
+      if (typeof s === 'string') {
+        return { teza: s, stan_faktyczny: '', rozstrzygniecie: '', podstawa_prawna: '' }
+      }
     }
-    return summaryData.summary
+
+    const payload = s as SummaryPayload
+
+    // If teza itself looks like a raw JSON dump (fallback stored full LLM response there)
+    if (payload && typeof payload.teza === 'string' && payload.teza.trimStart().startsWith('{')) {
+      const cleaned = payload.teza.replace(/```json/g, '').replace(/```/g, '').trim()
+      try {
+        const inner = JSON.parse(cleaned) as SummaryPayload
+        if (inner?.teza) return inner
+      } catch { /* ignore, display as-is */ }
+    }
+
+    return payload
   }, [summaryData])
 
   return {
@@ -103,6 +129,8 @@ export function useJudgmentDetail(id: number) {
     loadingSummary,
     summaryError,
     similar,
+    references,
+    regulations,
     chatTurns,
     loadingChat,
     chatError,

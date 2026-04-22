@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { Layout } from '../../components/layout/Layout'
 import { useAuthStore } from '../../contexts/authStore'
 import { foldersApi } from '../../api'
@@ -84,15 +84,21 @@ export function FoldersPage() {
           ) : (
             <div className="results-list">
               {folders.map((folder) => (
-                <article key={folder.id} className="result-card">
-                  <div className="card-title-row">
-                    <h3>{folder.name}</h3>
-                    <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
-                      {folder.judgment_count ?? 0} orzeczeń
-                    </span>
-                  </div>
-                  {folder.description && <p className="excerpt">{folder.description}</p>}
-                </article>
+                <Link
+                  key={folder.id}
+                  to={ROUTES.FOLDER_DETAIL.replace(':id', String(folder.id))}
+                  style={{ textDecoration: 'none', color: 'inherit' }}
+                >
+                  <article className="result-card" style={{ cursor: 'pointer' }}>
+                    <div className="card-title-row">
+                      <h3>{folder.name}</h3>
+                      <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
+                        {folder.judgment_count ?? 0} orzeczeń
+                      </span>
+                    </div>
+                    {folder.description && <p className="excerpt">{folder.description}</p>}
+                  </article>
+                </Link>
               ))}
             </div>
           )}

@@ -1,6 +1,8 @@
-import { authApiClient } from './client'
+import { apiClient, authApiClient } from './client'
 import type {
   Folder,
+  FolderChatHistoryResponse,
+  FolderChatResponse,
   FolderCreatePayload,
   FolderJudgmentListResponse,
   FolderJudgmentPayload,
@@ -10,6 +12,11 @@ import type {
 export const foldersApi = {
   async list(): Promise<FolderListResponse> {
     const { data } = await authApiClient.get<FolderListResponse>('/folders')
+    return data
+  },
+
+  async getById(folderId: number): Promise<Folder> {
+    const { data } = await authApiClient.get<Folder>(`/folders/${folderId}`)
     return data
   },
 
@@ -29,5 +36,18 @@ export const foldersApi = {
 
   async removeJudgment(folderId: number, judgmentId: number): Promise<void> {
     await authApiClient.delete(`/folders/${folderId}/judgments/${judgmentId}`)
+  },
+
+  async chat(judgmentIds: number[], question: string): Promise<FolderChatResponse> {
+    const { data } = await apiClient.post<FolderChatResponse>('/folder-chat', {
+      judgment_ids: judgmentIds,
+      question,
+    })
+    return data
+  },
+
+  async getChatHistory(folderId: number): Promise<FolderChatHistoryResponse> {
+    const { data } = await authApiClient.get<FolderChatHistoryResponse>(`/history/folder-chat/${folderId}`)
+    return data
   },
 }

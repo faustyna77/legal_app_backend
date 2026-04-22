@@ -1,7 +1,7 @@
 import os
 from fastapi import APIRouter, HTTPException, Depends, Header
 from database import get_db_connection
-from schemas import SearchHistorySave, ChatHistorySave
+from schemas import SearchHistorySave, ChatHistorySave, FolderChatHistorySave
 from utils.jwt import verify_token
 
 router = APIRouter()
@@ -149,6 +149,42 @@ async def save_chat_history(
                VALUES ($1, $2, $3, $4, $5, $6)""",
             data.user_id, data.judgment_id, data.case_number,
             data.court, data.question, data.answer
+        )
+        return {"message": "Zapisano"}
+    finally:
+        await conn.close()
+
+@router.get("/history/folder-chat/{folder_id}")
+async def get_folder_chat_history(
+    folder_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    conn = await get_db_connection()
+    try:
+        rows = await conn.fetch(
+            """SELECT id, folder_id, folder_name, question, answer, created_at
+               FROM user_chat_history
+               WHERE user_id = $1 AND folder_id = $2
+               ORDER BY created_at ASC""",
+            current_user["user_id"], folder_id
+        )
+        return {"history": [dict(r) for r in rows]}
+    finally:
+        await conn.close()
+
+@router.post("/internal/folder-chat-history")
+async def save_folder_chat_history(
+    data: FolderChatHistorySave,
+    _: None = Depends(verify_internal_key)
+):
+    conn = await get_db_connection()
+    try:
+        await conn.execute(
+            """INSERT INTO user_chat_history
+               (user_id, folder_id, folder_name, question, answer)
+               VALUES ($1, $2, $3, $4, $5)""",
+            data.user_id, data.folder_id, data.folder_name,
+            data.question, data.answer
         )
         return {"message": "Zapisano"}
     finally:

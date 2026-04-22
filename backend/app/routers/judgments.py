@@ -278,6 +278,7 @@ async def get_judgment_references(judgment_id: int):
             "references_out": [
                 {
                     "case_number": r["referenced_case_number"],
+                    "judgment_id": r["referenced_judgment_id"],
                     "court": r["court"],
                     "date": r["date"],
                     "source_url": r["source_url"],

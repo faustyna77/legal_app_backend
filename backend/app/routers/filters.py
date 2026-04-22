@@ -91,7 +91,7 @@ async def get_all_filters():
         await conn.close()
 
 
-# ── Osobne endpointy (kompatybilność z istniejącym kodem) ─────
+# ── Osobne endpointy 
 
 @router.get("/filters/courts")
 async def get_courts():

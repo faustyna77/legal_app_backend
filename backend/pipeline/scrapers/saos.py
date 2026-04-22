@@ -95,6 +95,37 @@ _JUDGMENT_TYPE_MAP = {
     "ORDER": "postanowienie",
 }
 
+# Court types that are always final (last instance)
+_ALWAYS_FINAL_COURT_TYPES = {"SUPREME", "CONSTITUTIONAL_TRIBUNAL", "NATIONAL_APPEAL_CHAMBER"}
+
+_IS_FINAL_TEXT_PATTERN = re.compile(
+    r'(orzeczenie|wyrok|postanowienie)\s+(jest\s+)?nieprawomocn',
+    re.IGNORECASE,
+)
+_IS_PRAWOMOCNY_TEXT_PATTERN = re.compile(
+    r'(orzeczenie|wyrok|postanowienie)\s+(jest\s+)?prawomocn',
+    re.IGNORECASE,
+)
+
+
+def _infer_is_final(court_type_raw: str, court_name: str, content: str) -> str | None:
+    ct = (court_type_raw or "").upper()
+    cn = (court_name or "").lower()
+
+    if ct in _ALWAYS_FINAL_COURT_TYPES:
+        return "prawomocny"
+    if "sąd apelacyjny" in cn or "apelacyjny" in cn:
+        return "prawomocny"
+
+    # Parse text for explicit finality statements
+    if content:
+        if _IS_FINAL_TEXT_PATTERN.search(content):
+            return "nieprawomocny"
+        if _IS_PRAWOMOCNY_TEXT_PATTERN.search(content):
+            return "prawomocny"
+
+    return None
+
 _COURT_TYPE_MAP = {
     "COMMON": "Sąd powszechny",
     "SUPREME": "Sąd Najwyższy",
@@ -230,6 +261,8 @@ class SAOSScraper:
             else f"https://www.saos.org.pl/judgments/{item.get('id')}"
         )
 
+        is_final = _infer_is_final(raw_court_type, court_name, content)
+
         return {
             "saos_id": item.get("id"),
             "case_number": case_number,
@@ -246,7 +279,7 @@ class SAOSScraper:
             "source": "saos",
             "regulations": regulations,
             "judgment_type": judgment_type,
-            "is_final": None,  # SAOS API nie udostępnia tego pola
+            "is_final": is_final,
         }
 
     def scrape_range(

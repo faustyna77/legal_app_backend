@@ -7,6 +7,8 @@ import { LoginPage } from './pages/auth/LoginPage'
 import { RegisterPage } from './pages/auth/RegisterPage'
 import { AdminPage } from './pages/admin/AdminPage'
 import { FoldersPage } from './pages/folders/FoldersPage'
+import { FolderDetailPage } from './pages/folders/FolderDetailPage'
+import { FolderChatPage } from './pages/folders/FolderChatPage'
 
 export default function App() {
   return (
@@ -20,6 +22,8 @@ export default function App() {
         <Route path={ROUTES.REGISTER} element={<RegisterPage />} />
         <Route path={ROUTES.ADMIN} element={<AdminPage />} />
         <Route path={ROUTES.ORGANIZATION} element={<FoldersPage />} />
+        <Route path={ROUTES.FOLDER_DETAIL} element={<FolderDetailPage />} />
+        <Route path={ROUTES.FOLDER_CHAT} element={<FolderChatPage />} />
       </Routes>
     </BrowserRouter>
   )

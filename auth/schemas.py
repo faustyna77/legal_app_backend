@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional
-from datetime import date
+from datetime import date as DateType
 
 class UserRegister(BaseModel):
     email: EmailStr
@@ -34,7 +34,7 @@ class FolderJudgmentAdd(BaseModel):
     judgment_id: int
     case_number: str
     court: Optional[str] = None
-    date: Optional[date] = None
+    date: Optional[DateType] = None
     note: Optional[str] = None
 
 class SearchHistorySave(BaseModel):
@@ -49,5 +49,12 @@ class ChatHistorySave(BaseModel):
     judgment_id: int
     case_number: str
     court: Optional[str] = None
+    question: str
+    answer: str
+
+class FolderChatHistorySave(BaseModel):
+    user_id: int
+    folder_id: int
+    folder_name: str
     question: str
     answer: str

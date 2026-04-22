@@ -10,6 +10,32 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://orzeczenia.nsa.gov.pl"
 
+_KNOWN_RES_LABELS = {
+    "Data orzeczenia", "Data wpływu", "Sąd", "Sędziowie",
+    "Symbol z opisem", "Symbole z opisem", "Hasła tematyczne", "Powiązane",
+    "Skarżony organ", "Treść wyniku", "Sentencja", "Prawomocność",
+    "Rodzaj orzeczenia", "Sygnatura",
+}
+
+
+def _parse_res_div_fields(res_div) -> dict[str, list[str]]:
+    """Parse res-div-list block into {label: [values]} using known label names as delimiters."""
+    parts = [p.strip() for p in res_div.get_text(separator="|", strip=True).split("|") if p.strip()]
+    fields: dict[str, list[str]] = {}
+    current_label: str | None = None
+    current_values: list[str] = []
+    for part in parts:
+        if part in _KNOWN_RES_LABELS:
+            if current_label is not None:
+                fields[current_label] = current_values
+            current_label = part
+            current_values = []
+        elif current_label is not None:
+            current_values.append(part)
+    if current_label is not None:
+        fields[current_label] = current_values
+    return fields
+
 _ARTICLE_PATTERN = re.compile(
     r"\bart\.\s*\d+[a-z]?(?:\s*§\s*\d+[a-z]?)?(?:\s*ust\.\s*\d+[a-z]?)?(?:\s*pkt\s*\d+[a-z]?)?",
     re.IGNORECASE,
@@ -104,34 +130,58 @@ class NSAScraper:
         case_number = header_text.split(" - ")[0].strip() if " - " in header_text else doc_id
         court_full = header_text.split(" - ", 1)[1].strip() if " - " in header_text else "NSA"
 
+        # Extract judgment type prefix from court_full (e.g. "Postanowienie WSA w Warszawie")
+        _type_match = re.match(
+            r'^(Wyrok|Postanowienie|Uchwała|Zarządzenie|Uzasadnienie)\s+',
+            court_full, re.IGNORECASE
+        )
+        judgment_type_from_header = _type_match.group(1).lower() if _type_match else None
+        if _type_match:
+            court_full = court_full[_type_match.end():].strip()
+
         res_div = soup.find("div", class_="res-div-list")
         date = None
         city = None
-        judgment_type = None
+        judgment_type = judgment_type_from_header
         is_final = None
+        keywords: list[str] = []
+        related_case_numbers: list[str] = []
+
         if res_div:
-            res_text = res_div.get_text(separator="|", strip=True)
-            date_m = re.search(r"Data orzeczenia\|(\d{4}-\d{2}-\d{2})", res_text)
-            if date_m:
-                date = date_m.group(1)
-            city_m = re.search(r"S[aą]d\|([^|]+)", res_text)
-            if city_m:
-                court_name = city_m.group(1).strip()
-                city_m2 = re.search(r"w\s+(\w+(?:\s+\w+)?)\s*$", court_name)
-                if city_m2:
-                    city = city_m2.group(1).strip()
-            type_m = re.search(r"Rodzaj orzeczenia\|([^|]+)", res_text)
-            if type_m:
-                judgment_type = type_m.group(1).strip().lower()
-            final_m = re.search(r"Prawomocno[śs][ćc]\|([^|]+)", res_text)
-            if final_m:
-                raw_final = final_m.group(1).strip().lower()
-                if "prawomocn" in raw_final and "nie" not in raw_final:
-                    is_final = "prawomocny"
-                elif "nieprawomocn" in raw_final or ("nie" in raw_final and "prawomocn" in raw_final):
+            fields = _parse_res_div_fields(res_div)
+
+            date_vals = fields.get("Data orzeczenia") or []
+            if date_vals and re.match(r"\d{4}-\d{2}-\d{2}", date_vals[0]):
+                date = date_vals[0]
+
+            court_vals = fields.get("Sąd") or []
+            if court_vals:
+                city_m = re.search(r"w\s+(\w+(?:\s+\w+)?)\s*$", court_vals[0])
+                if city_m:
+                    city = city_m.group(1).strip()
+
+            type_vals = fields.get("Rodzaj orzeczenia") or []
+            if type_vals:
+                judgment_type = type_vals[0].strip().lower()
+            # judgment_type_from_header already set as default above
+
+            # Prawomocność: osobne pole lub embedded w wartościach "Data orzeczenia"
+            final_candidates = (fields.get("Prawomocność") or []) + (fields.get("Data orzeczenia") or [])
+            for candidate in final_candidates:
+                raw = candidate.strip().lower()
+                if "nieprawomocn" in raw:
                     is_final = "nieprawomocny"
-                else:
-                    is_final = raw_final
+                    break
+                if "prawomocn" in raw:
+                    is_final = "prawomocny"
+                    break
+
+            keywords = [k.strip() for k in (fields.get("Hasła tematyczne") or []) if k.strip()]
+
+            related_case_numbers = [
+                c.strip() for c in (fields.get("Powiązane") or [])
+                if c.strip() and re.search(r"\d+/\d{2,4}", c)
+            ]
 
         content_tags = soup.find_all("span", class_="info-list-value-uzasadnienie")
         if not content_tags:
@@ -159,7 +209,7 @@ class NSAScraper:
             "date": date,
             "content": content,
             "thesis": thesis,
-            "keywords": [],
+            "keywords": keywords,
             "doc_id": doc_id,
             "source_url": url,
             "source": "nsa",
@@ -167,12 +217,25 @@ class NSAScraper:
             "regulations": regulations,
             "judgment_type": judgment_type,
             "is_final": is_final,
+            "related_case_numbers": related_case_numbers,
         }
 
     def scrape_range(self, date_from: str, date_to: str, limit: int = 500) -> list[dict]:
         results = []
         page = 1
-        consecutive_out_of_range = 0
+
+        # Set server-side date filter via session POST
+        try:
+            self.session.get(f"{BASE_URL}/cbo/query", timeout=15)
+            self.session.post(
+                f"{BASE_URL}/cbo/search",
+                data={"odDaty": date_from, "doDaty": date_to, "submit": "Szukaj"},
+                timeout=15,
+            )
+            logger.info("NSA session date filter set: %s – %s", date_from, date_to)
+        except requests.RequestException as e:
+            logger.error("Failed to init NSA search session: %s", e)
+            return results
 
         while len(results) < limit:
             try:
@@ -198,19 +261,8 @@ class NSAScraper:
                 doc_id = href.split("/doc/")[-1]
                 judgment = self.scrape_judgment(doc_id)
                 if judgment:
-                    j_date = judgment.get("date") or ""
-                    if date_from <= j_date <= date_to:
-                        results.append(judgment)
-                        consecutive_out_of_range = 0
-                        logger.info("Scraped %s date=%s (%d/%d)", judgment["case_number"], j_date, len(results), limit)
-                    elif j_date < date_from:
-                        consecutive_out_of_range += 1
-                        logger.info("Skipped %s date=%s (too old)", judgment["case_number"], j_date)
-                        if consecutive_out_of_range >= 5:
-                            logger.info("5 consecutive old judgments, stopping")
-                            return results
-                    else:
-                        logger.info("Skipped %s date=%s (too new)", judgment["case_number"], j_date)
+                    results.append(judgment)
+                    logger.info("Scraped %s date=%s (%d/%d)", judgment["case_number"], judgment.get("date", "?"), len(results), limit)
                 time.sleep(self.delay)
 
             page += 1

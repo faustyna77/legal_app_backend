@@ -2,6 +2,21 @@ import { useMemo, useState } from 'react'
 import type { FiltersPayload } from '../../types'
 import { Spinner } from '../ui/Spinner'
 
+const CITY_LOCATIVE: Record<string, string> = {
+  'Gdańsku': 'Gdańsk', 'Łodzi': 'Łódź', 'Poznaniu': 'Poznań',
+  'Krakowie': 'Kraków', 'Szczecinie': 'Szczecin', 'Warszawie': 'Warszawa',
+  'Olsztynie': 'Olsztyn', 'Bydgoszczy': 'Bydgoszcz', 'Gliwicach': 'Gliwice',
+  'Siedlcach': 'Siedlce', 'Suwałkach': 'Suwałki', 'Opolu': 'Opole',
+  'Rzeszowie': 'Rzeszów', 'Piszu': 'Pisz', 'Giżycku': 'Giżycko',
+  'Szczytnie': 'Szczytno', 'Człuchowie': 'Człuchów', 'Bełchatowie': 'Bełchatów',
+  'Piotrkowie Trybunalskim': 'Piotrków Trybunalski', 'Lublinie': 'Lublin',
+  'Białymstoku': 'Białystok', 'Toruniu': 'Toruń',
+}
+
+function normalizeCity(city: string): string {
+  return CITY_LOCATIVE[city] ?? city
+}
+
 interface JudgmentFiltersProps {
   filters: FiltersPayload | null
   loading: boolean
@@ -75,6 +90,65 @@ function OptionSection({
             <span style={{ color: 'var(--color-text-muted)' }}>{opt.count.toLocaleString('pl-PL')}</span>
           </label>
         ))}
+      </div>
+    </details>
+  )
+}
+
+function CityOptionSection({
+  rawOptions,
+  selected,
+  onSelect,
+  limit = 15,
+}: {
+  rawOptions: { value: string; count: number }[]
+  selected: string[]
+  onSelect: (v: string[]) => void
+  limit?: number
+}) {
+  const merged = useMemo(() => {
+    const map = new Map<string, { display: string; raws: string[]; count: number }>()
+    for (const opt of rawOptions) {
+      const key = normalizeCity(opt.value)
+      const existing = map.get(key)
+      if (existing) {
+        existing.count += opt.count
+        existing.raws.push(opt.value)
+      } else {
+        map.set(key, { display: key, raws: [opt.value], count: opt.count })
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.count - a.count)
+  }, [rawOptions])
+
+  if (!merged.length) return null
+
+  return (
+    <details style={{ borderBottom: '1px solid var(--color-border-light)', padding: '8px 0' }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 18, listStyle: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>Miasto</span>
+      </summary>
+      <div style={{ maxHeight: 220, overflow: 'auto', marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {merged.slice(0, limit).map((opt) => {
+          const isChecked = opt.raws.some(r => selected.includes(r))
+          return (
+            <label key={opt.display} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={isChecked}
+                onChange={() => {
+                  if (isChecked) {
+                    onSelect(selected.filter(v => !opt.raws.includes(v)))
+                  } else {
+                    onSelect([...selected, ...opt.raws.filter(r => !selected.includes(r))])
+                  }
+                }}
+              />
+              <span style={{ flex: 1 }}>{opt.display}</span>
+              <span style={{ color: 'var(--color-text-muted)' }}>{opt.count.toLocaleString('pl-PL')}</span>
+            </label>
+          )
+        })}
       </div>
     </details>
   )
@@ -228,7 +302,7 @@ export function JudgmentFilters({
           <OptionSection title="Obszar prawa" options={filters.legal_areas} selected={selectedLegalArea} onSelect={onSelectLegalArea} defaultOpen />
           <OptionSection title="Typ sądu" options={filters.court_types} selected={selectedCourtType} onSelect={onSelectCourtType} />
           <OptionSection title="Sąd" options={filters.courts} selected={selectedCourt} onSelect={onSelectCourt} />
-          <OptionSection title="Miasto" options={filters.cities} selected={selectedCity} onSelect={onSelectCity} />
+          <CityOptionSection rawOptions={filters.cities} selected={selectedCity} onSelect={onSelectCity} />
           <OptionSectionSingle title="Rok" options={filters.years.map((y) => ({ value: String(y.value), count: y.count }))} selected={selectedYear} onSelect={onSelectYear} />
 
           <details style={{ borderBottom: '1px solid var(--color-border-light)', padding: '10px 0' }}>

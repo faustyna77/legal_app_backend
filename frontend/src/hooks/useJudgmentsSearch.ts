@@ -227,15 +227,28 @@ export function useJudgmentsSearch() {
 
   const summaryObject = useMemo<SummaryPayload | null>(() => {
     if (!summaryData) return null
-    if (typeof summaryData.summary === 'string') {
-      return {
-        teza: summaryData.summary,
-        stan_faktyczny: '',
-        rozstrzygniecie: '',
-        podstawa_prawna: '',
+
+    let s = summaryData.summary
+
+    if (typeof s === 'string') {
+      const cleaned = s.replace(/```json/g, '').replace(/```/g, '').trim()
+      try { s = JSON.parse(cleaned) } catch { /* keep as string */ }
+      if (typeof s === 'string') {
+        return { teza: s, stan_faktyczny: '', rozstrzygniecie: '', podstawa_prawna: '' }
       }
     }
-    return summaryData.summary
+
+    const payload = s as SummaryPayload
+
+    if (payload && typeof payload.teza === 'string' && payload.teza.trimStart().startsWith('{')) {
+      const cleaned = payload.teza.replace(/```json/g, '').replace(/```/g, '').trim()
+      try {
+        const inner = JSON.parse(cleaned) as SummaryPayload
+        if (inner?.teza) return inner
+      } catch { /* ignore */ }
+    }
+
+    return payload
   }, [summaryData])
 
   return {

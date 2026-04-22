@@ -24,6 +24,7 @@ export function JudgmentDetailPage() {
     judgment, loading, error,
     summaryObject, loadingSummary, summaryError,
     similar,
+    references, regulations,
     chatTurns, loadingChat, chatError, askQuestion,
   } = useJudgmentDetail(numId)
 
@@ -141,6 +142,80 @@ export function JudgmentDetailPage() {
                 isSelected={false}
                 onClick={() => navigate(`/judgments/${j.id}`)}
               />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Related judgments (references) */}
+      {references && (references.references_out.length > 0 || references.references_in.length > 0) && (
+        <div className="detail-block">
+          <h4>Powiązane orzeczenia</h4>
+          {references.references_out.length > 0 && (
+            <>
+              <h5 style={{ marginBottom: 6 }}>Cytowane przez to orzeczenie</h5>
+              <ul style={{ margin: '0 0 12px', paddingLeft: 20, fontSize: 14, lineHeight: 1.8 }}>
+                {references.references_out.map((ref) => (
+                  <li key={ref.case_number}>
+                    {ref.in_database && ref.judgment_id ? (
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => navigate(`/judgments/${ref.judgment_id}`)}
+                        style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 'inherit' }}
+                      >
+                        {ref.case_number}
+                      </button>
+                    ) : (
+                      <span>{ref.case_number}</span>
+                    )}
+                    {ref.court && <span style={{ color: 'var(--color-text-muted)' }}> — {ref.court}</span>}
+                    {ref.date && <span style={{ color: 'var(--color-text-muted)' }}> ({ref.date})</span>}
+                    {!ref.in_database && <span style={{ color: 'var(--color-text-muted)', fontSize: 12 }}> [brak w bazie]</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {references.references_in.length > 0 && (
+            <>
+              <h5 style={{ marginBottom: 6 }}>Cytowane przez inne orzeczenia</h5>
+              <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14, lineHeight: 1.8 }}>
+                {references.references_in.map((ref) => (
+                  <li key={ref.judgment_id}>
+                    <button
+                      type="button"
+                      className="link-btn"
+                      onClick={() => navigate(`/judgments/${ref.judgment_id}`)}
+                      style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 'inherit' }}
+                    >
+                      {ref.case_number}
+                    </button>
+                    {ref.court && <span style={{ color: 'var(--color-text-muted)' }}> — {ref.court}</span>}
+                    {ref.date && <span style={{ color: 'var(--color-text-muted)' }}> ({ref.date})</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Referenced regulations */}
+      {regulations && regulations.regulations.length > 0 && (
+        <div className="detail-block">
+          <h4>Powołane przepisy</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {regulations.regulations.map((reg, i) => (
+              <div key={i} style={{ fontSize: 14 }}>
+                <span style={{ fontWeight: 600 }}>{reg.act_title}</span>
+                {reg.act_year && <span style={{ color: 'var(--color-text-muted)' }}> ({reg.act_year})</span>}
+                {reg.articles.length > 0 && (
+                  <div style={{ color: 'var(--color-text-muted)', marginTop: 2, fontSize: 13 }}>
+                    {reg.articles.join(', ')}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>
