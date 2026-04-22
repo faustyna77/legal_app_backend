@@ -34,6 +34,8 @@ class Judgment(Base):
     keywords: Mapped[Optional[list[str]]] = mapped_column(ARRAY(Text))
     embedding: Mapped[Optional[list[float]]] = mapped_column(Vector(1024))
     source_url: Mapped[Optional[str]] = mapped_column(Text)
+    judgment_type: Mapped[Optional[str]] = mapped_column(String(50))
+    is_final: Mapped[Optional[str]] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

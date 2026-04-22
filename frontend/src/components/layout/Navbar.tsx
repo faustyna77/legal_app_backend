@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { ROUTES } from '../../config'
 import { useAuthStore } from '../../contexts/authStore'
 import { useAuth } from '../../hooks/useAuth'
+import { UpdatesBell } from './UpdatesBell'
 
 export function Navbar() {
   const { isAuthenticated } = useAuthStore()
@@ -21,6 +22,7 @@ export function Navbar() {
       </nav>
 
       <div className="topbar-actions">
+        <UpdatesBell />
         {isAuthenticated ? (
           <button className="ghost-btn" type="button" onClick={() => void logout()}>
             Wyloguj

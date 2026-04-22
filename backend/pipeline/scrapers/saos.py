@@ -85,6 +85,16 @@ def _extract_city_from_court(court_name: str) -> str | None:
     return None
 
 
+_JUDGMENT_TYPE_MAP = {
+    "SENTENCE": "wyrok",
+    "DECISION": "postanowienie",
+    "RESOLUTION": "uchwała",
+    "REASONS": "uzasadnienie",
+    "REGULATION": "zarządzenie",
+    "ORDER_DISMISSING_APPEAL": "postanowienie",
+    "ORDER": "postanowienie",
+}
+
 _COURT_TYPE_MAP = {
     "COMMON": "Sąd powszechny",
     "SUPREME": "Sąd Najwyższy",
@@ -210,6 +220,9 @@ class SAOSScraper:
         raw_court_type = item.get("courtType") or ""
         mapped_court_type = _COURT_TYPE_MAP.get(raw_court_type.upper(), raw_court_type)
 
+        raw_judgment_type = item.get("judgmentType") or ""
+        judgment_type = _JUDGMENT_TYPE_MAP.get(raw_judgment_type.upper()) or (raw_judgment_type.lower() if raw_judgment_type else None)
+
         raw_href = item.get("href") or ""
         web_url = (
             raw_href.replace("/api/judgments/", "/judgments/")
@@ -232,6 +245,8 @@ class SAOSScraper:
             "source_url": web_url,
             "source": "saos",
             "regulations": regulations,
+            "judgment_type": judgment_type,
+            "is_final": None,  # SAOS API nie udostępnia tego pola
         }
 
     def scrape_range(

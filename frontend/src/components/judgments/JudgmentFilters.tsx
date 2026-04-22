@@ -26,6 +26,10 @@ interface JudgmentFiltersProps {
   onSelectArticle: (v: string) => void
   selectedActTitle: string
   onSelectActTitle: (v: string) => void
+  selectedJudgmentType: string[]
+  onSelectJudgmentType: (v: string[]) => void
+  selectedIsFinal: string
+  onSelectIsFinal: (v: string) => void
   onApplyFilters: () => void
   onClearFilters: () => void
 }
@@ -137,6 +141,10 @@ export function JudgmentFilters({
   onSelectArticle,
   selectedActTitle,
   onSelectActTitle,
+  selectedJudgmentType,
+  onSelectJudgmentType,
+  selectedIsFinal,
+  onSelectIsFinal,
   onApplyFilters,
   onClearFilters,
 }: JudgmentFiltersProps) {
@@ -151,7 +159,9 @@ export function JudgmentFilters({
     selectedDateFrom ||
     selectedDateTo ||
     selectedArticle ||
-    selectedActTitle
+    selectedActTitle ||
+    selectedJudgmentType.length ||
+    selectedIsFinal
   )
 
   const countLabel = useMemo(() => {
@@ -212,6 +222,8 @@ export function JudgmentFilters({
             </div>
           </details>
 
+          <OptionSection title="Typ orzeczenia" options={filters.judgment_types ?? []} selected={selectedJudgmentType} onSelect={onSelectJudgmentType} defaultOpen />
+          <OptionSectionSingle title="Prawomocność" options={filters.finality ?? []} selected={selectedIsFinal} onSelect={onSelectIsFinal} />
           <OptionSection title="Źródło" options={filters.sources} selected={selectedSource} onSelect={onSelectSource} />
           <OptionSection title="Obszar prawa" options={filters.legal_areas} selected={selectedLegalArea} onSelect={onSelectLegalArea} defaultOpen />
           <OptionSection title="Typ sądu" options={filters.court_types} selected={selectedCourtType} onSelect={onSelectCourtType} />

@@ -39,21 +39,21 @@ async def get_all_filters():
         except Exception:
             area_rows = []  # kolumna jeszcze nie istnieje
 
-        # ── 3. PRAWOMOCNOŚĆ ────────────────────────────────────
-        # Sądy II instancji (apelacyjne, NSA, SN) = prawomocne
+        # ── 3. PRAWOMOCNOŚĆ (z kolumny is_final) ──────────────
         finality_rows = await conn.fetch("""
-            SELECT
-                CASE
-                    WHEN court ILIKE '%apelacyj%'
-                      OR court ILIKE '%najwyższy%'
-                      OR court ILIKE '%NSA%'
-                      OR court_type ILIKE '%SUPREME%'
-                    THEN 'Prawomocne'
-                    ELSE 'Nieprawomocne'
-                END      AS value,
-                COUNT(*) AS count
+            SELECT is_final AS value, COUNT(*) AS count
             FROM judgments
-            GROUP BY value
+            WHERE is_final IS NOT NULL AND is_final != ''
+            GROUP BY is_final
+            ORDER BY count DESC
+        """)
+
+        # ── 3b. TYP ORZECZENIA ─────────────────────────────────
+        judgment_type_rows = await conn.fetch("""
+            SELECT judgment_type AS value, COUNT(*) AS count
+            FROM judgments
+            WHERE judgment_type IS NOT NULL AND judgment_type != ''
+            GROUP BY judgment_type
             ORDER BY count DESC
         """)
 
@@ -79,11 +79,12 @@ async def get_all_filters():
         """)
 
         return {
-            "sources":      [{"value": r["value"], "count": r["count"]} for r in source_rows],
-            "legal_areas":  [{"value": r["value"], "count": r["count"]} for r in area_rows],
-            "finality":     [{"value": r["value"], "count": r["count"]} for r in finality_rows],
-            "cities":       [{"value": r["value"], "count": r["count"]} for r in city_rows],
-            "years":        [{"value": r["value"], "count": r["count"]} for r in year_rows],
+            "sources":         [{"value": r["value"], "count": r["count"]} for r in source_rows],
+            "legal_areas":     [{"value": r["value"], "count": r["count"]} for r in area_rows],
+            "finality":        [{"value": r["value"], "count": r["count"]} for r in finality_rows],
+            "judgment_types":  [{"value": r["value"], "count": r["count"]} for r in judgment_type_rows],
+            "cities":          [{"value": r["value"], "count": r["count"]} for r in city_rows],
+            "years":           [{"value": r["value"], "count": r["count"]} for r in year_rows],
         }
 
     finally:

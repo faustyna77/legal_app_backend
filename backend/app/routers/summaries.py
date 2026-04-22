@@ -37,7 +37,9 @@ async def _generate_summary(judgment: dict) -> dict:
                     "Jestes asystentem prawnym. Na podstawie tresci orzeczenia sadowego "
                     "wygeneruj ustrukturyzowane podsumowanie w jezyku polskim. "
                     "Odpowiedz wylacznie w formacie JSON z polami: "
-                    "teza, stan_faktyczny, rozstrzygniecie, podstawa_prawna. "
+                    "teza, stan_faktyczny, rozstrzygniecie, podstawa_prawna, typ_orzeczenia, prawomocnosc. "
+                    "Pole typ_orzeczenia to jeden z: wyrok, postanowienie, uchwala, zarzadzenie, uzasadnienie, inne. "
+                    "Pole prawomocnosc to jeden z: prawomocny, nieprawomocny, nieustalono. "
                     "Kazde pole to string. Nie dodawaj zadnych innych kluczy ani komentarzy."
                 ),
             },
@@ -64,6 +66,8 @@ async def _generate_summary(judgment: dict) -> dict:
             "stan_faktyczny": "",
             "rozstrzygniecie": "",
             "podstawa_prawna": "",
+            "typ_orzeczenia": "",
+            "prawomocnosc": "",
         }
 
 
@@ -104,12 +108,20 @@ async def get_judgment_summary(
     # generuj przez LLM
     summary = await _generate_summary(judgment)
 
+    judgment_type_llm = summary.pop("typ_orzeczenia", None) or None
+    is_final_llm = summary.pop("prawomocnosc", None) or None
+
     # zapisz do bazy
     conn2 = await get_db_connection()
     try:
         await conn2.execute(
-            "UPDATE judgments SET summary = $1 WHERE id = $2",
+            """UPDATE judgments SET summary = $1,
+               judgment_type = COALESCE(judgment_type, $2),
+               is_final = COALESCE(is_final, $3)
+               WHERE id = $4""",
             json.dumps(summary, ensure_ascii=False),
+            judgment_type_llm,
+            is_final_llm,
             judgment_id,
         )
     finally:

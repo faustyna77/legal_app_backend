@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS judgments (
     legal_area VARCHAR(100),
     source VARCHAR(20),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    summary JSONB
+    summary JSONB,
+    judgment_type VARCHAR(50),
+    is_final VARCHAR(50),
+    content_updated_at TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_judgments_embedding
@@ -38,6 +41,9 @@ CREATE INDEX IF NOT EXISTS idx_judgments_city ON judgments(city);
 CREATE INDEX IF NOT EXISTS idx_judgments_court_type ON judgments(court_type);
 CREATE INDEX IF NOT EXISTS idx_judgments_legal_area ON judgments(legal_area);
 CREATE INDEX IF NOT EXISTS idx_judgments_source ON judgments(source);
+CREATE INDEX IF NOT EXISTS idx_judgments_judgment_type ON judgments(judgment_type);
+CREATE INDEX IF NOT EXISTS idx_judgments_is_final ON judgments(is_final);
+CREATE INDEX IF NOT EXISTS idx_judgments_content_updated_at ON judgments(content_updated_at DESC) WHERE content_updated_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS judgment_references (
     id SERIAL PRIMARY KEY,

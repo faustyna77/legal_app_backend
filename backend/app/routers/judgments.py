@@ -27,6 +27,8 @@ async def list_judgments(
     city: Optional[list[str]] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    judgment_type: Optional[list[str]] = Query(None),
+    is_final: Optional[str] = Query(None),
     article: Optional[list[str]] = Query(None),
     act_title: Optional[list[str]] = Query(None),
     limit: int = Query(20, le=100),
@@ -62,11 +64,20 @@ async def list_judgments(
             params.append(cities)
             conditions.append(f"j.city = ANY(${len(params)}::text[])")
         if date_from:
-            params.append(DateType.fromisoformat(date_from))  # ← konwersja
+            params.append(DateType.fromisoformat(date_from))
             conditions.append(f"j.date >= ${len(params)}")
         if date_to:
-            params.append(DateType.fromisoformat(date_to))    # ← konwersja
+            params.append(DateType.fromisoformat(date_to))
             conditions.append(f"j.date <= ${len(params)}")
+
+        judgment_types = _normalize_multi(judgment_type)
+        if judgment_types:
+            params.append(judgment_types)
+            conditions.append(f"j.judgment_type = ANY(${len(params)}::text[])")
+
+        if is_final:
+            params.append(is_final)
+            conditions.append(f"j.is_final = ${len(params)}")
         articles = _normalize_multi(article)
         if articles:
             article_conditions = []
@@ -117,6 +128,25 @@ async def list_judgments(
             "limit": limit,
             "offset": offset
         }
+    finally:
+        await conn.close()
+
+
+@router.get("/updates")
+async def recent_updates(days: int = Query(7, ge=1, le=90)):
+    conn = await get_db_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT id, case_number, court, date, source_url, content_updated_at
+            FROM judgments
+            WHERE content_updated_at >= NOW() - ($1 || ' days')::INTERVAL
+            ORDER BY content_updated_at DESC
+            LIMIT 50
+            """,
+            str(days),
+        )
+        return {"updates": [dict(r) for r in rows], "days": days}
     finally:
         await conn.close()
 

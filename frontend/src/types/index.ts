@@ -13,6 +13,7 @@ export interface FiltersPayload {
   sources: FilterOption[]
   legal_areas: FilterOption[]
   finality: FilterOption[]
+  judgment_types: FilterOption[]
   cities: FilterOption[]
   years: FilterOption[]
   courts: FilterOption[]
@@ -30,6 +31,8 @@ export interface SearchFilters {
   city?: string | string[]
   article?: string | string[]
   act_title?: string | string[]
+  judgment_type?: string | string[]
+  is_final?: string
 }
 
 // ── Judgment references (attached by rag.py _attach_judgment_references) ────
@@ -84,6 +87,8 @@ export interface JudgmentListParams {
   date_to?: string
   article?: string | string[]
   act_title?: string | string[]
+  judgment_type?: string | string[]
+  is_final?: string
   limit?: number
   offset?: number
 }
@@ -130,6 +135,21 @@ export interface ChatTurn {
   question: string
   answer: string
   evidence_quotes: string[]
+}
+
+// ── Judgment updates (uzasadnienie added) ─────────────────────────────────────
+export interface JudgmentUpdate {
+  id: number
+  case_number: string
+  court: string
+  date: string
+  source_url: string | null
+  content_updated_at: string
+}
+
+export interface JudgmentUpdatesResponse {
+  updates: JudgmentUpdate[]
+  days: number
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────────

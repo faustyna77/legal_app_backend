@@ -29,6 +29,8 @@ export function SearchPage() {
   const [selectedDateTo, setSelectedDateTo] = useState('')
   const [selectedArticle, setSelectedArticle] = useState('')
   const [selectedActTitle, setSelectedActTitle] = useState('')
+  const [selectedJudgmentType, setSelectedJudgmentType] = useState<string[]>([])
+  const [selectedIsFinal, setSelectedIsFinal] = useState('')
   const [sortMode, setSortMode] = useState<SortMode>('newest')
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [page, setPage] = useState(1)
@@ -53,6 +55,8 @@ export function SearchPage() {
     date_to?: string
     article?: string | string[]
     act_title?: string | string[]
+    judgment_type?: string[]
+    is_final?: string
   } = {}) => {
     setLoadingBrowse(true)
     const dateFrom = opts.date_from || (opts.year ? `${opts.year}-01-01` : undefined)
@@ -68,6 +72,8 @@ export function SearchPage() {
       ...(dateTo ? { date_to: dateTo } : {}),
       ...(opts.article ? { article: opts.article } : {}),
       ...(opts.act_title ? { act_title: opts.act_title } : {}),
+      ...(opts.judgment_type?.length ? { judgment_type: opts.judgment_type } : {}),
+      ...(opts.is_final ? { is_final: opts.is_final } : {}),
     }
     judgmentsApi
       .list(params)
@@ -174,7 +180,9 @@ export function SearchPage() {
       selectedDateFrom ||
       selectedDateTo ||
       selectedArticle ||
-      selectedActTitle
+      selectedActTitle ||
+      selectedJudgmentType.length ||
+      selectedIsFinal
     )
 
     if (!anyAdvanced && !query.trim()) {
@@ -194,6 +202,8 @@ export function SearchPage() {
       date_to: selectedDateTo || (selectedYear ? `${selectedYear}-12-31` : undefined),
       article: selectedArticle || undefined,
       act_title: selectedActTitle || undefined,
+      judgment_type: selectedJudgmentType.length ? selectedJudgmentType : undefined,
+      is_final: selectedIsFinal || undefined,
     })
   }
 
@@ -208,6 +218,8 @@ export function SearchPage() {
     setSelectedDateTo('')
     setSelectedArticle('')
     setSelectedActTitle('')
+    setSelectedJudgmentType([])
+    setSelectedIsFinal('')
     setHasSearched(false)
     setPage(1)
     loadBrowseList()
@@ -261,6 +273,8 @@ export function SearchPage() {
           selectedDateTo={selectedDateTo}     onSelectDateTo={setSelectedDateTo}
           selectedArticle={selectedArticle}   onSelectArticle={setSelectedArticle}
           selectedActTitle={selectedActTitle} onSelectActTitle={setSelectedActTitle}
+          selectedJudgmentType={selectedJudgmentType} onSelectJudgmentType={setSelectedJudgmentType}
+          selectedIsFinal={selectedIsFinal}   onSelectIsFinal={setSelectedIsFinal}
           onApplyFilters={handleApplyFilters}
           onClearFilters={handleClearFilters}
         />

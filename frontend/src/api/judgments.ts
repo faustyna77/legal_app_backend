@@ -4,6 +4,7 @@ import type {
   JudgmentListParams,
   JudgmentListResponse,
   JudgmentResult,
+  JudgmentUpdatesResponse,
   SummaryResponse,
 } from '../types'
 
@@ -89,6 +90,14 @@ export const judgmentsApi = {
     const { data } = await apiClient.get<JudgmentRegulationsResponse>(
       `/judgments/${id}/regulations`,
     )
+    return data
+  },
+
+  /** GET /judgments/updates?days=N */
+  async getRecentUpdates(days = 7): Promise<JudgmentUpdatesResponse> {
+    const { data } = await apiClient.get<JudgmentUpdatesResponse>('/judgments/updates', {
+      params: { days },
+    })
     return data
   },
 

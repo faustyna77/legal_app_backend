@@ -78,7 +78,9 @@ def generate_summary_with_llm(case_number: str, court: str, date, thesis: str, c
                         "Jestes asystentem prawnym. Na podstawie tresci orzeczenia sadowego "
                         "wygeneruj ustrukturyzowane podsumowanie w jezyku polskim. "
                         "Odpowiedz wylacznie w formacie JSON z polami: "
-                        "teza, stan_faktyczny, rozstrzygniecie, podstawa_prawna. "
+                        "teza, stan_faktyczny, rozstrzygniecie, podstawa_prawna, typ_orzeczenia, prawomocnosc. "
+                        "Pole typ_orzeczenia to jeden z: wyrok, postanowienie, uchwa\u0142a, zarz\u0105dzenie, uzasadnienie, inne. "
+                        "Pole prawomocnosc to jeden z: prawomocny, nieprawomocny, nieustalono. "
                         "Kazde pole to string. Nie dodawaj zadnych innych kluczy ani komentarzy."
                     ),
                 },
@@ -102,7 +104,7 @@ def generate_summary_with_llm(case_number: str, court: str, date, thesis: str, c
         raw_clean = raw.replace("```json", "").replace("```", "").strip()
         return json.loads(raw_clean)
     except Exception:
-        return {"teza": raw, "stan_faktyczny": "", "rozstrzygniecie": "", "podstawa_prawna": ""}
+        return {"teza": raw, "stan_faktyczny": "", "rozstrzygniecie": "", "podstawa_prawna": "", "typ_orzeczenia": "", "prawomocnosc": ""}
 
 
 
@@ -155,9 +157,14 @@ def backfill_summaries(limit: int = 100) -> int:
                     case_number, court, j_date, thesis or "", content
                 )
                 if summary:
+                    judgment_type_llm = summary.pop("typ_orzeczenia", None) or None
+                    is_final_llm = summary.pop("prawomocnosc", None) or None
                     cur.execute(
-                        "UPDATE judgments SET summary = %s WHERE id = %s",
-                        (json.dumps(summary, ensure_ascii=False), judgment_id),
+                        """UPDATE judgments SET summary = %s,
+                           judgment_type = COALESCE(judgment_type, %s),
+                           is_final = COALESCE(is_final, %s)
+                           WHERE id = %s""",
+                        (json.dumps(summary, ensure_ascii=False), judgment_type_llm, is_final_llm, judgment_id),
                     )
                     updated += 1
                     logger.info("Generated summary for id=%d", judgment_id)
@@ -386,25 +393,27 @@ def store_judgment(cur, judgment: dict) -> bool:
     try:
         cur.execute(
             """
-            INSERT INTO judgments (case_number, court, court_type, city, date, content, thesis, keywords, doc_id, source_url, source, legal_area)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (case_number) DO NOTHING
-    RETURNING id
-    """,
-    (
-        judgment["case_number"],
-        judgment["court"],
-        judgment.get("court_type"),
-        judgment.get("city"),
-        judgment.get("date"),
-        judgment["content"],
-        judgment.get("thesis"),
-        judgment.get("keywords") or [],
-        judgment.get("doc_id"),
-        judgment.get("source_url"),
-        judgment.get("source"),
-        judgment.get("legal_area"),
-    ),
+            INSERT INTO judgments (case_number, court, court_type, city, date, content, thesis, keywords, doc_id, source_url, source, legal_area, judgment_type, is_final)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (case_number) DO NOTHING
+            RETURNING id
+            """,
+            (
+                judgment["case_number"],
+                judgment["court"],
+                judgment.get("court_type"),
+                judgment.get("city"),
+                judgment.get("date"),
+                judgment["content"],
+                judgment.get("thesis"),
+                judgment.get("keywords") or [],
+                judgment.get("doc_id"),
+                judgment.get("source_url"),
+                judgment.get("source"),
+                judgment.get("legal_area"),
+                judgment.get("judgment_type"),
+                judgment.get("is_final"),
+            ),
         )
         return cur.fetchone() is not None
     except Exception as e:
@@ -723,37 +732,76 @@ def ensure_isap_act_for_regulation(cur, isap: ISAPScraper, act_title: str, force
 
 def populate_from_nsa(date_from: str, date_to: str, limit: int) -> int:
     scraper = NSAScraper(delay=1.0)
-   
+
     logger.info("Fetching from NSA: date_from=%s date_to=%s limit=%d", date_from, date_to, limit)
     judgments = scraper.scrape_range(date_from, date_to, limit=limit)
     logger.info("Fetched %d judgments from NSA", len(judgments))
     conn = get_conn()
     cur = conn.cursor()
     stored = 0
+    updated_content = 0
     try:
         for j in judgments:
-            cur.execute("SELECT id FROM judgments WHERE case_number = %s", (j["case_number"],))
+            cur.execute("SELECT id, length(content) FROM judgments WHERE case_number = %s", (j["case_number"],))
             existing = cur.fetchone()
             if existing:
-                judgment_id = existing[0]
-                cur.execute("SELECT 1 FROM judgment_chunks WHERE judgment_id = %s LIMIT 1", (judgment_id,))
-                if not cur.fetchone() and j.get("content"):
-                    store_judgment_chunks(cur, judgment_id, j["content"])
+                judgment_id, old_content_len = existing
+                new_content = j.get("content", "")
+
+                # Jeśli nowa treść jest istotnie dłuższa — dodano uzasadnienie
+                if new_content and len(new_content) > (old_content_len or 0) * 1.15:
+                    cur.execute(
+                        """UPDATE judgments SET content = %s, embedding = NULL, summary = NULL,
+                           content_updated_at = NOW(),
+                           judgment_type = COALESCE(judgment_type, %s),
+                           is_final = COALESCE(is_final, %s)
+                           WHERE id = %s""",
+                        (new_content, j.get("judgment_type"), j.get("is_final"), judgment_id),
+                    )
+                    cur.execute("DELETE FROM judgment_chunks WHERE judgment_id = %s", (judgment_id,))
+                    store_judgment_chunks(cur, judgment_id, new_content)
+                    updated_content += 1
+                    logger.info("Updated content for NSA %s (uzasadnienie added)", j["case_number"])
+                else:
+                    # Uzupełnij brakujące metadane bez nadpisywania treści
+                    cur.execute(
+                        """UPDATE judgments
+                           SET judgment_type = COALESCE(judgment_type, %s),
+                               is_final = COALESCE(is_final, %s)
+                           WHERE id = %s""",
+                        (j.get("judgment_type"), j.get("is_final"), judgment_id),
+                    )
+                    cur.execute("SELECT 1 FROM judgment_chunks WHERE judgment_id = %s LIMIT 1", (judgment_id,))
+                    if not cur.fetchone() and new_content:
+                        store_judgment_chunks(cur, judgment_id, new_content)
+
                 if j.get("content"):
                     store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
                 if j.get("regulations"):
                     regulations = enrich_regulations_articles(cur, j.get("regulations", []), j.get("content"))
                     store_judgment_regulations(cur, judgment_id, regulations)
-                    
+                link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
+                continue
 
-                       
+            if store_judgment(cur, j):
+                cur.execute("SELECT id FROM judgments WHERE case_number = %s", (j["case_number"],))
+                row = cur.fetchone()
+                if row:
+                    judgment_id = row[0]
+                    store_judgment_chunks(cur, judgment_id, j["content"])
+                    if j.get("content"):
+                        store_judgment_references(cur, judgment_id, j["case_number"], j["content"])
+                    if j.get("regulations"):
+                        regulations = enrich_regulations_articles(cur, j.get("regulations", []), j.get("content"))
+                        store_judgment_regulations(cur, judgment_id, regulations)
                     link_references_to_existing_judgment(cur, j["case_number"], judgment_id)
                 stored += 1
+
         conn.commit()
     finally:
         cur.close()
         conn.close()
-    logger.info("Stored %d new NSA judgments (skipped %d duplicates)", stored, len(judgments) - stored)
+    logger.info("Stored %d new NSA judgments, updated content for %d (uzasadnienie)", stored, updated_content)
     return stored
 
 
@@ -949,6 +997,49 @@ def backfill_isap_acts_for_regulations(limit: int = 500) -> int:
     return updated
 
 
+def backfill_judgment_metadata(limit: int = 200) -> int:
+    """Backfill judgment_type i is_final dla rekordów bez tych danych via LLM."""
+    conn = get_conn()
+    cur = conn.cursor()
+    updated = 0
+    try:
+        cur.execute(
+            """SELECT id, case_number, court, date, thesis, content
+               FROM judgments
+               WHERE (judgment_type IS NULL OR is_final IS NULL)
+                 AND content IS NOT NULL AND content != ''
+               LIMIT %s""",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        logger.info("Found %d judgments without judgment_type/is_final", len(rows))
+        for row in rows:
+            judgment_id, case_number, court, j_date, thesis, content = row
+            try:
+                summary = generate_summary_with_llm(case_number, court, j_date, thesis or "", content)
+                if summary:
+                    judgment_type_llm = summary.get("typ_orzeczenia") or None
+                    is_final_llm = summary.get("prawomocnosc") or None
+                    cur.execute(
+                        """UPDATE judgments
+                           SET judgment_type = COALESCE(judgment_type, %s),
+                               is_final = COALESCE(is_final, %s)
+                           WHERE id = %s""",
+                        (judgment_type_llm, is_final_llm, judgment_id),
+                    )
+                    updated += 1
+                    logger.info("Backfilled metadata for id=%d: type=%s final=%s", judgment_id, judgment_type_llm, is_final_llm)
+            except Exception as e:
+                logger.error("Metadata backfill failed for id=%d: %s", judgment_id, e)
+            time.sleep(0.5)
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    logger.info("Backfilled judgment metadata for %d judgments", updated)
+    return updated
+
+
 def backfill_saos_regulation_articles(limit: int = 200) -> int:
     conn = get_conn()
     cur = conn.cursor()
@@ -1093,6 +1184,7 @@ def main():
     parser.add_argument("--backfill-nsa-regulations", action="store_true", help="Backfill NSA regulations from content regex + ISAP lookup")
     parser.add_argument("--backfill-isap-acts-for-regulations", action="store_true", help="Backfill missing legal_acts/articles from ISAP for SAOS regulation titles")
     parser.add_argument("--backfill-saos-regulation-articles", action="store_true", help="Backfill empty SAOS regulation articles from judgment content + ISAP article mapping")
+    parser.add_argument("--backfill-judgment-metadata", action="store_true", help="Backfill judgment_type and is_final for existing judgments via LLM")
     args = parser.parse_args()
 
     if not DATABASE_URL:
@@ -1136,6 +1228,11 @@ def main():
     if args.backfill_saos_regulation_articles:
         logger.info("Backfilling SAOS regulation articles from judgment content + ISAP mapping...")
         backfill_saos_regulation_articles(limit=args.limit)
+        return
+
+    if args.backfill_judgment_metadata:
+        logger.info("Backfilling judgment_type and is_final via LLM...")
+        backfill_judgment_metadata(limit=args.limit)
         return
 
     if args.source == "saos":

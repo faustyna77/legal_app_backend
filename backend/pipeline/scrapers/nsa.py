@@ -107,6 +107,8 @@ class NSAScraper:
         res_div = soup.find("div", class_="res-div-list")
         date = None
         city = None
+        judgment_type = None
+        is_final = None
         if res_div:
             res_text = res_div.get_text(separator="|", strip=True)
             date_m = re.search(r"Data orzeczenia\|(\d{4}-\d{2}-\d{2})", res_text)
@@ -118,6 +120,18 @@ class NSAScraper:
                 city_m2 = re.search(r"w\s+(\w+(?:\s+\w+)?)\s*$", court_name)
                 if city_m2:
                     city = city_m2.group(1).strip()
+            type_m = re.search(r"Rodzaj orzeczenia\|([^|]+)", res_text)
+            if type_m:
+                judgment_type = type_m.group(1).strip().lower()
+            final_m = re.search(r"Prawomocno[śs][ćc]\|([^|]+)", res_text)
+            if final_m:
+                raw_final = final_m.group(1).strip().lower()
+                if "prawomocn" in raw_final and "nie" not in raw_final:
+                    is_final = "prawomocny"
+                elif "nieprawomocn" in raw_final or ("nie" in raw_final and "prawomocn" in raw_final):
+                    is_final = "nieprawomocny"
+                else:
+                    is_final = raw_final
 
         content_tags = soup.find_all("span", class_="info-list-value-uzasadnienie")
         if not content_tags:
@@ -151,6 +165,8 @@ class NSAScraper:
             "source": "nsa",
             "legal_area": "administracyjne",
             "regulations": regulations,
+            "judgment_type": judgment_type,
+            "is_final": is_final,
         }
 
     def scrape_range(self, date_from: str, date_to: str, limit: int = 500) -> list[dict]:

@@ -24,6 +24,8 @@ export type SearchParams = {
   selectedDateTo?: string
   selectedArticle?: string
   selectedActTitle?: string
+  selectedJudgmentType?: string[]
+  selectedIsFinal?: string
 }
 
 export type Filters = SearchFilters
@@ -95,6 +97,8 @@ export function useJudgmentsSearch() {
     if (params.selectedCourtType.length) filtersPayload.court_type = params.selectedCourtType
     if (params.selectedArticle) filtersPayload.article = params.selectedArticle
     if (params.selectedActTitle) filtersPayload.act_title = params.selectedActTitle
+    if (params.selectedJudgmentType?.length) filtersPayload.judgment_type = params.selectedJudgmentType
+    if (params.selectedIsFinal) filtersPayload.is_final = params.selectedIsFinal
     return filtersPayload
   }
 
@@ -164,6 +168,8 @@ export function useJudgmentsSearch() {
         ...(effectiveFilters.date_to ? { date_to: effectiveFilters.date_to } : {}),
         ...(effectiveFilters.article ? { article: effectiveFilters.article } : {}),
         ...(effectiveFilters.act_title ? { act_title: effectiveFilters.act_title } : {}),
+        ...(effectiveFilters.judgment_type ? { judgment_type: effectiveFilters.judgment_type } : {}),
+        ...(effectiveFilters.is_final ? { is_final: effectiveFilters.is_final } : {}),
       })
       setSearchResult({ judgments: payload.judgments, total: payload.total })
       setResults(payload.judgments)

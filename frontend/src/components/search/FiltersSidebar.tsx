@@ -49,7 +49,9 @@ export function FiltersSidebar({
     filters.legal_area ||
     filters.source ||
     filters.date_from ||
-    filters.date_to
+    filters.date_to ||
+    filters.judgment_type ||
+    filters.is_final
   )
 
   return (
@@ -107,6 +109,36 @@ export function FiltersSidebar({
         >
           <option value="">Wszystkie źródła</option>
           {(options?.sources ?? []).map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.value}</option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <label style={labelStyle}>Typ orzeczenia</label>
+        <select
+          style={controlStyle}
+          value={typeof filters.judgment_type === 'string' ? filters.judgment_type : (filters.judgment_type?.[0] ?? '')}
+          onChange={(e) => onFiltersChange({ ...filters, judgment_type: e.target.value || undefined })}
+          disabled={optionsLoading}
+        >
+          <option value="">Wszystkie typy</option>
+          {(options?.judgment_types ?? []).map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.value}</option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <label style={labelStyle}>Prawomocność</label>
+        <select
+          style={controlStyle}
+          value={filters.is_final ?? ''}
+          onChange={(e) => onFiltersChange({ ...filters, is_final: e.target.value || undefined })}
+          disabled={optionsLoading}
+        >
+          <option value="">Wszystkie</option>
+          {(options?.finality ?? []).map((opt) => (
             <option key={opt.value} value={opt.value}>{opt.value}</option>
           ))}
         </select>

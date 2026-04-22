@@ -13,6 +13,7 @@ from pipeline.populate_db import (
     populate_from_saos,
     backfill_references,
     backfill_saos_regulation_articles,
+    backfill_judgment_metadata,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -80,6 +81,7 @@ def run_saos_job() -> None:
     fetch_limit = _int_env("INGEST_SAOS_LIMIT", 200)
     embed_judgment_limit = _int_env("INGEST_EMBED_JUDGMENTS_LIMIT", 100)
     embed_batch_size = _int_env("INGEST_EMBED_BATCH_SIZE", 100)
+    metadata_limit = _int_env("INGEST_METADATA_LIMIT", 50)
     court_type = os.getenv("INGEST_SAOS_COURT_TYPE") or None
     keyword = os.getenv("INGEST_SAOS_KEYWORD") or None
 
@@ -93,6 +95,9 @@ def run_saos_job() -> None:
     )
     backfill_references(limit=500)
     backfill_saos_regulation_articles(limit=500)
+    # SAOS nie zwraca is_final przez API — uzupełniamy przez LLM
+    if metadata_limit > 0:
+        backfill_judgment_metadata(limit=metadata_limit)
     embedded_judgments, embedded_chunks = _embed_full_for_next_judgments(embed_judgment_limit, embed_batch_size)
     logger.info(
         "SAOS job done: stored=%d embedded_judgments=%d embedded_chunks=%d",
@@ -103,20 +108,23 @@ def run_saos_job() -> None:
 
 
 def run_nsa_job() -> None:
+    # Skanuje ostatnie 2 dni — świeże orzeczenia
     date_from = os.getenv(
         "INGEST_NSA_DATE_FROM",
         (date.today() - timedelta(days=2)).strftime("%Y-%m-%d")
     )
-    
     date_to = str(date.today())
     fetch_limit = _int_env("INGEST_NSA_LIMIT", 200)
     embed_judgment_limit = _int_env("INGEST_EMBED_JUDGMENTS_LIMIT", 100)
     embed_batch_size = _int_env("INGEST_EMBED_BATCH_SIZE", 100)
+    metadata_limit = _int_env("INGEST_METADATA_LIMIT", 50)
 
     logger.info("Starting NSA ingestion job")
     stored = populate_from_nsa(date_from=date_from, date_to=date_to, limit=fetch_limit)
     backfill_references(limit=500)
-   
+    # NSA wyciąga judgment_type/is_final z HTML, ale na wszelki wypadek uzupełniamy LLM
+    if metadata_limit > 0:
+        backfill_judgment_metadata(limit=metadata_limit)
     embedded_judgments, embedded_chunks = _embed_full_for_next_judgments(embed_judgment_limit, embed_batch_size)
     logger.info(
         "NSA job done: stored=%d embedded_judgments=%d embedded_chunks=%d",
@@ -124,6 +132,23 @@ def run_nsa_job() -> None:
         embedded_judgments,
         embedded_chunks,
     )
+
+
+def run_nsa_uzasadnienia_job() -> None:
+    """Skanuje ostatnie 90 dni NSA aby wykryć uzasadnienia dodane do starszych orzeczeń.
+
+    NSA publikuje uzasadnienia jako oddzielne dokumenty — pojawiają się na listingu
+    jako nowe wpisy, ale mają datę orzeczenia sprzed tygodni/miesięcy. Bez tego jobu
+    byłyby pomijane przez filtr dat w run_nsa_job.
+    """
+    uzasadnienia_days = _int_env("INGEST_NSA_UZASADNIENIA_DAYS", 90)
+    date_from = (date.today() - timedelta(days=uzasadnienia_days)).strftime("%Y-%m-%d")
+    date_to = str(date.today())
+    fetch_limit = _int_env("INGEST_NSA_UZASADNIENIA_LIMIT", 100)
+
+    logger.info("Starting NSA uzasadnienia check (last %d days)", uzasadnienia_days)
+    updated = populate_from_nsa(date_from=date_from, date_to=date_to, limit=fetch_limit)
+    logger.info("NSA uzasadnienia job done: processed=%d", updated)
 
 
 def _safe_run(name: str, fn) -> None:
@@ -136,6 +161,7 @@ def _safe_run(name: str, fn) -> None:
 def main() -> None:
     saos_hours = _int_env("INGEST_SAOS_INTERVAL_HOURS", 6)
     nsa_hours = _int_env("INGEST_NSA_INTERVAL_HOURS", 12)
+    nsa_uzasadnienia_hours = _int_env("INGEST_NSA_UZASADNIENIA_INTERVAL_HOURS", 24)
 
     scheduler = BlockingScheduler(
         executors={"default": ThreadPoolExecutor(1)},
@@ -144,12 +170,13 @@ def main() -> None:
 
     scheduler.add_job(lambda: _safe_run("saos", run_saos_job), "interval", hours=saos_hours, id="saos")
     scheduler.add_job(lambda: _safe_run("nsa", run_nsa_job), "interval", hours=nsa_hours, id="nsa")
+    scheduler.add_job(lambda: _safe_run("nsa_uzasadnienia", run_nsa_uzasadnienia_job), "interval", hours=nsa_uzasadnienia_hours, id="nsa_uzasadnienia")
 
     logger.info(
-        "Scheduler started: SAOS every %dh, NSA every %dh, full embedding for up to %d judgments/job",
+        "Scheduler started: SAOS every %dh, NSA every %dh, NSA uzasadnienia check every %dh",
         saos_hours,
         nsa_hours,
-        _int_env("INGEST_EMBED_JUDGMENTS_LIMIT", 20),
+        nsa_uzasadnienia_hours,
     )
 
     _safe_run("saos_initial", run_saos_job)

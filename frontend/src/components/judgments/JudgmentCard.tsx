@@ -8,18 +8,29 @@ interface JudgmentCardProps {
   isSelected: boolean
   onClick: () => void
   action?: ReactNode
+  checked?: boolean
+  onCheck?: (id: number) => void
 }
 
-export function JudgmentCard({ judgment, isSelected, onClick, action }: JudgmentCardProps) {
+export function JudgmentCard({ judgment, isSelected, onClick, action, checked, onCheck }: JudgmentCardProps) {
   return (
     <article
-      className={`result-card${isSelected ? ' active' : ''}`}
+      className={`result-card${isSelected ? ' active' : ''}${checked ? ' bulk-checked' : ''}`}
       onClick={onClick}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && onClick()}
     >
       <div className="card-title-row">
+        {onCheck && (
+          <input
+            type="checkbox"
+            className="bulk-checkbox"
+            checked={checked ?? false}
+            onClick={(e) => e.stopPropagation()}
+            onChange={() => onCheck(judgment.id)}
+          />
+        )}
         <h3>{judgment.case_number}</h3>
         <time dateTime={judgment.date}>{formatDate(judgment.date)}</time>
       </div>
